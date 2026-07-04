@@ -2,10 +2,26 @@ import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import App from "./App";
 
-describe("App / Home landing", () => {
-  it("renders the 'hello world' text by default", () => {
+describe("App / Main landing", () => {
+  it("renders the Main page with title and purpose by default", () => {
     render(<App />);
-    expect(screen.getByText(/hello world/i)).toBeInTheDocument();
+    // "milvus_station" appears in the nav brand and the hero title.
+    expect(screen.getAllByText(/milvus_station/i).length).toBeGreaterThanOrEqual(
+      1,
+    );
+    // Purpose / architecture copy replaces the old "hello world".
+    expect(screen.getByText(/what it does/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/semantic/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("describes the architecture and data pipeline", () => {
+    render(<App />);
+    expect(screen.getByText(/^architecture$/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/nginx/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/ollama/i).length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getAllByText(/milvus/i).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("shows the default MySQL credentials", () => {
@@ -24,10 +40,15 @@ describe("App / Home landing", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
-  it("exposes the three navigation menus", () => {
+  it("exposes the navigation menus (Main, Source, Milvus, mysqladmin)", () => {
     render(<App />);
-    expect(screen.getByRole("button", { name: /^source$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^milvus$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^main$/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^source$/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^milvus$/i }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /mysqladmin/i })).toBeInTheDocument();
   });
 });

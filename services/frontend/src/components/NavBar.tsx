@@ -1,7 +1,7 @@
 // Top navigation bar for the data console.
-// "Source" and "Milvus" switch the SPA view; "mysqladmin" opens /mysql/
-// in a new tab and does NOT change the current view.
-import { Database, ExternalLink, Layers, Moon, Sun } from "lucide-react";
+// "Main", "Source" and "Milvus" switch the SPA view; "mysqladmin" opens
+// /mysql/ in a new tab and does NOT change the current view.
+import { Database, ExternalLink, Home, Layers, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useTheme } from "@/components/theme-provider";
@@ -37,6 +37,17 @@ export default function NavBar({ current, onNavigate }: NavBarProps) {
         </button>
 
         <Separator orientation="vertical" className="mr-1 !h-6" />
+
+        <Button
+          type="button"
+          variant={current === "home" ? "secondary" : "ghost"}
+          size="sm"
+          aria-current={current === "home" ? "page" : undefined}
+          onClick={() => onNavigate("home")}
+        >
+          <Home className="size-4" />
+          Main
+        </Button>
 
         <Button
           type="button"
