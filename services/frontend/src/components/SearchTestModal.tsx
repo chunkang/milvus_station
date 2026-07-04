@@ -307,7 +307,7 @@ export default function SearchTestModal({
           )}
 
           {response && (
-            <div className="flex flex-col gap-2">
+            <div className="flex max-h-[45vh] flex-col gap-2 overflow-y-auto pr-1">
               {response.results.length === 0 ? (
                 <p className="text-sm italic text-muted-foreground">
                   No matches
