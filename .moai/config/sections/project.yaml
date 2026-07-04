@@ -1,0 +1,9 @@
+project:
+  name: milvus_station
+  description: ''
+  type: ''
+  locale: '{{LOCALE}}'
+  created_at: '2026-07-03T18:43:41.888004Z'
+  initialized: 'true'
+github:
+  profile_name: chunkang
