@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Typed fetch wrapper for the milvus_station backend API.
 // All calls hit relative /api/... paths (same-origin, proxied by nginx).
 
@@ -42,7 +48,7 @@ export interface RowsResponse {
 export interface IndexRequest {
   database: string;
   table: string;
-  column: string;
+  columns: string[];
 }
 
 export interface IndexResponse {
@@ -50,6 +56,7 @@ export interface IndexResponse {
   collection?: string;
   indexed?: number;
   dim?: number;
+  columns?: string[];
   message?: string;
 }
 

@@ -1,3 +1,9 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ milvus_station                                                           │
+# │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+# │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+# └──────────────────────────────────────────────────────────────────────────┘
+
 """Tests for the embedding / Milvus vector endpoints.
 
 Ollama is mocked at the ``httpx`` layer and Milvus via a fake ``pymilvus``
@@ -199,6 +205,21 @@ def stub_validation(monkeypatch):
         ],
     )
 
+    def _fake_read_pk_columns(db, table, pk, columns, limit=1000, settings=None):
+        # Three canned rows; each requested column gets the same base value so
+        # single-column tests behave exactly as before (row 2 is empty ->
+        # skipped). Multi-column tests override this per test as needed.
+        canned = [(1, "hello"), (2, ""), (3, "world")]
+        rows = []
+        for pk_val, value in canned:
+            row = {"pk": pk_val}
+            for col in columns:
+                row[col] = value
+            rows.append(row)
+        return rows
+
+    monkeypatch.setattr(console, "read_pk_columns", _fake_read_pk_columns)
+
 
 @pytest.fixture()
 def ok_ollama(monkeypatch):
@@ -235,6 +256,59 @@ def test_index_success_returns_indexed_and_dim(
     assert record["index_params"]["index_type"] == "IVF_FLAT"
     assert record["index_params"]["metric_type"] == "COSINE"
     assert record["inserted"][0] == [1, 3]  # pks (empty row skipped)
+
+
+def test_index_multi_column_combines_fields(monkeypatch, stub_validation):
+    """Selecting several columns combines their per-row values into one
+    labelled text (``col: value`` lines) before embedding."""
+    record = {}
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus(record))
+
+    # Rows with DISTINCT values per column so we can assert the combination.
+    monkeypatch.setattr(
+        console,
+        "read_pk_columns",
+        lambda db, table, pk, columns, limit=1000, settings=None: [
+            {"pk": 1, "title": "Inception", "overview": "A heist in dreams"},
+        ],
+    )
+    # Capture the exact text handed to embed_text.
+    seen: list[str] = []
+
+    def _capture(text, settings=None):
+        seen.append(text)
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(vectors, "embed_text", _capture)
+
+    result = vectors.build_index("shop", "films", ["title", "overview"])
+
+    assert result["status"] == "ok"
+    assert result["indexed"] == 1
+    assert result["columns"] == ["title", "overview"]
+    # The combined text contains both fields, labelled, in order, newline-joined.
+    assert seen == ["title: Inception\noverview: A heist in dreams"]
+
+
+def test_index_endpoint_accepts_columns_list(
+    monkeypatch, stub_validation, ok_ollama, client
+):
+    """POST /index accepts a ``columns`` list and indexes successfully."""
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus({}))
+    resp = client.post(
+        "/index",
+        json={"database": "shop", "table": "users", "columns": ["bio", "title"]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["columns"] == ["bio", "title"]
+
+
+def test_index_endpoint_requires_at_least_one_column(client):
+    """POST /index with neither columns nor column is a 400."""
+    resp = client.post("/index", json={"database": "shop", "table": "users"})
+    assert resp.status_code == 400
 
 
 def test_index_ollama_unreachable_returns_error(

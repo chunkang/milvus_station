@@ -1,6 +1,13 @@
-// Modal dialog for indexing a MySQL table column into Milvus.
-// Fetches the table's columns, lets the user pick an embeddable column,
-// then POSTs to /api/index and shows the result (toast + inline alert) or error.
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
+// Modal dialog for indexing one or more MySQL table columns into Milvus.
+// Fetches the table's columns, lets the user pick one or more embeddable
+// columns (their values are combined into one text per row), then POSTs to
+// /api/index and shows the result (toast + inline alert) or error.
 import { useEffect, useState } from "react";
 import { CheckCircle2, Loader2, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
@@ -18,7 +25,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -42,23 +48,25 @@ export default function IndexModal({
 }: IndexModalProps) {
   const [columns, setColumns] = useState<ColumnInfo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  // One or more selected column names (combined into a single text per row).
+  const [selected, setSelected] = useState<string[]>([]);
 
   const [indexing, setIndexing] = useState(false);
   const [result, setResult] = useState<IndexResponse | null>(null);
   const [indexError, setIndexError] = useState<string | null>(null);
 
-  // Load columns on mount.
+  // Load columns on mount; pre-select the first embeddable column.
   useEffect(() => {
     let active = true;
     setColumns(null);
     setLoadError(null);
+    setSelected([]);
     getColumns(database, table)
       .then((res) => {
         if (!active) return;
         setColumns(res.columns);
         const firstEmbeddable = res.columns.find((c) => c.embeddable);
-        setSelected(firstEmbeddable ? firstEmbeddable.name : null);
+        setSelected(firstEmbeddable ? [firstEmbeddable.name] : []);
       })
       .catch((err: unknown) => {
         if (!active) return;
@@ -69,13 +77,19 @@ export default function IndexModal({
     };
   }, [database, table]);
 
+  function toggle(name: string, checked: boolean) {
+    setSelected((prev) =>
+      checked ? [...prev, name] : prev.filter((c) => c !== name)
+    );
+  }
+
   async function handleIndex() {
-    if (!selected) return;
+    if (selected.length === 0) return;
     setIndexing(true);
     setIndexError(null);
     setResult(null);
     try {
-      const res = await indexToMilvus({ database, table, column: selected });
+      const res = await indexToMilvus({ database, table, columns: selected });
       setResult(res);
       if (res.status === "ok") {
         toast.success(
@@ -103,8 +117,9 @@ export default function IndexModal({
             Index <code className="font-mono">{table}</code> to Milvus
           </DialogTitle>
           <DialogDescription>
-            Select an embeddable column to index. Non-embeddable columns are
-            disabled.
+            Select one or more embeddable columns. Their values are combined
+            into a single text per row before embedding. Non-embeddable columns
+            are disabled.
           </DialogDescription>
         </DialogHeader>
 
@@ -126,22 +141,26 @@ export default function IndexModal({
 
         {columns && (
           <div className="flex flex-col gap-4">
-            <RadioGroup
-              value={selected ?? ""}
-              onValueChange={setSelected}
-              className="gap-1"
+            <div
+              role="group"
+              aria-label="Columns to embed"
+              className="flex flex-col gap-1"
             >
               {columns.map((col) => {
                 const id = `col-${col.name}`;
+                const checked = selected.includes(col.name);
                 return (
                   <div
                     key={col.name}
                     className="flex items-center gap-3 rounded-md border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/40 has-[:checked]:border-border has-[:checked]:bg-muted/60"
                   >
-                    <RadioGroupItem
+                    <input
+                      type="checkbox"
                       id={id}
-                      value={col.name}
+                      className="size-4 accent-primary disabled:opacity-50"
+                      checked={checked}
                       disabled={!col.embeddable}
+                      onChange={(e) => toggle(col.name, e.target.checked)}
                     />
                     <Label
                       htmlFor={id}
@@ -161,7 +180,7 @@ export default function IndexModal({
                   </div>
                 );
               })}
-            </RadioGroup>
+            </div>
 
             {result && result.status === "ok" && (
               <Alert>
@@ -199,7 +218,7 @@ export default function IndexModal({
           <Button
             type="button"
             onClick={handleIndex}
-            disabled={indexing || !selected || !columns}
+            disabled={indexing || selected.length === 0 || !columns}
           >
             {indexing && <Loader2 className="size-4 animate-spin" />}
             {indexing ? "Indexing…" : "Index"}

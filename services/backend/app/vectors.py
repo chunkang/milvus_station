@@ -1,3 +1,9 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ milvus_station                                                           │
+# │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+# │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+# └──────────────────────────────────────────────────────────────────────────┘
+
 """Embedding + Milvus vector indexing / browsing.
 
 Two external systems are involved:
@@ -135,25 +141,51 @@ def _clamp_page(page: int, page_size: int) -> tuple[int, int]:
     return page, page_size
 
 
+def _combine_row_text(row: dict[str, Any], columns: list[str]) -> str:
+    """Combine several column values of a row into one labelled text block.
+
+    Each non-empty column contributes a ``"<column>: <value>"`` line, joined
+    by newlines in the given column order. Empty/null values are skipped.
+    Embedding this combined text lets a single vector capture multiple fields
+    (e.g. a movie's title + overview + actors).
+    """
+    parts: list[str] = []
+    for col in columns:
+        value = row.get(col)
+        if value is None or str(value).strip() == "":
+            continue
+        parts.append(f"{col}: {value}")
+    return "\n".join(parts)
+
+
 def build_index(
     database: str,
     table: str,
-    column: str,
+    columns: list[str] | str,
     id_column: str | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Embed a text column and (re)build a Milvus collection for it.
+    """Embed one or more text columns and (re)build a Milvus collection.
 
-    Validation errors (unknown db/table/column) raise ``HTTPException``
-    (404) and propagate. Ollama / Milvus failures are caught and returned
+    ``columns`` may be a list of column names (their per-row values are
+    combined into one text before embedding) or a single string (backward
+    compatible). Validation errors (unknown db/table/column) raise
+    ``HTTPException`` (404). Ollama / Milvus failures are caught and returned
     as ``{"status": "error", ...}`` so the endpoint always answers 200.
     """
     settings = settings or get_settings()
 
+    # Normalize to a de-duplicated, order-preserving list of column names.
+    if isinstance(columns, str):
+        columns = [columns]
+    seen: set[str] = set()
+    columns = [c for c in columns if c and not (c in seen or seen.add(c))]
+
     # --- identifier validation (raises 404 on mismatch, never interpolates raw) ---
     console.validate_database(database, settings)
     console.validate_table(database, table, settings)
-    console.validate_column(database, table, column, settings)
+    for col in columns:
+        console.validate_column(database, table, col, settings)
 
     if id_column:
         console.validate_column(database, table, id_column, settings)
@@ -163,9 +195,19 @@ def build_index(
 
     collection = sanitize_collection_name(database, table)
 
+    if not columns:
+        return {
+            "status": "error",
+            "collection": collection,
+            "indexed": 0,
+            "dim": 0,
+            "columns": columns,
+            "message": "at least one column is required",
+        }
+
     try:
-        rows = console.read_pk_text(
-            database, table, pk_column, column, MAX_INDEX_ROWS, settings
+        rows = console.read_pk_columns(
+            database, table, pk_column, columns, MAX_INDEX_ROWS, settings
         )
 
         pks: list[int] = []
@@ -174,15 +216,15 @@ def build_index(
         dim: int | None = None
 
         for row in rows:
-            text = row.get("text")
-            if text is None or str(text).strip() == "":
+            text = _combine_row_text(row, columns)
+            if text.strip() == "":
                 continue
-            embedding = embed_text(str(text), settings)
+            embedding = embed_text(text, settings)
             if dim is None:
                 dim = len(embedding)
             pks.append(int(row["pk"]))
             vectors.append(embedding)
-            texts.append(str(text)[:TEXT_MAX_LENGTH])
+            texts.append(text[:TEXT_MAX_LENGTH])
 
         if dim is None:
             return {
@@ -190,6 +232,7 @@ def build_index(
                 "collection": collection,
                 "indexed": 0,
                 "dim": 0,
+                "columns": columns,
                 "message": "no non-empty text rows to index",
             }
 
@@ -200,7 +243,11 @@ def build_index(
             "collection": collection,
             "indexed": len(pks),
             "dim": dim,
-            "message": f"indexed {len(pks)} rows into {collection}",
+            "columns": columns,
+            "message": (
+                f"indexed {len(pks)} rows into {collection} "
+                f"from columns: {', '.join(columns)}"
+            ),
         }
     except EmbeddingError as exc:  # model-not-pulled / Ollama unreachable
         # The message is crafted for end-users; forward it verbatim.
@@ -209,6 +256,7 @@ def build_index(
             "collection": collection,
             "indexed": 0,
             "dim": 0,
+            "columns": columns,
             "message": str(exc),
         }
     except Exception as exc:  # Milvus unreachable or any other failure
@@ -217,6 +265,7 @@ def build_index(
             "collection": collection,
             "indexed": 0,
             "dim": 0,
+            "columns": columns,
             "message": f"{type(exc).__name__}: {exc}",
         }
 

@@ -1,3 +1,9 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ milvus_station                                                           │
+# │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+# │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+# └──────────────────────────────────────────────────────────────────────────┘
+
 """FastAPI application: health & data-console API.
 
 SPEC-INFRA-001 / TASK-006 (health) + data-console browse/index endpoints.
@@ -51,11 +57,17 @@ router = APIRouter(tags=["console"])
 
 
 class IndexRequest(BaseModel):
-    """Request body for POST /index."""
+    """Request body for POST /index.
+
+    ``columns`` selects one or more text columns to embed (their per-row
+    values are combined). ``column`` is kept for backward compatibility with
+    single-field callers; ``columns`` takes precedence when both are given.
+    """
 
     database: str
     table: str
-    column: str
+    columns: list[str] | None = None
+    column: str | None = None
     id_column: str | None = None
 
 
@@ -101,9 +113,18 @@ def get_table_rows(
 
 @router.post("/index")
 def post_index(body: IndexRequest) -> dict[str, object]:
-    """Embed a text column and build a Milvus collection for it."""
+    """Embed one or more text columns and build a Milvus collection."""
+    # Resolve the effective column list: `columns` wins, else the legacy
+    # single `column`, else it's a bad request.
+    selected = body.columns if body.columns else (
+        [body.column] if body.column else []
+    )
+    if not selected:
+        raise HTTPException(
+            status_code=400, detail="at least one column is required"
+        )
     return vectors.build_index(
-        body.database, body.table, body.column, body.id_column
+        body.database, body.table, selected, body.id_column
     )
 
 

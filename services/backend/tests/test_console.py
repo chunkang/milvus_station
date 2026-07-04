@@ -1,3 +1,9 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ milvus_station                                                           │
+# │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+# │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+# └──────────────────────────────────────────────────────────────────────────┘
+
 """Tests for the data-console DB introspection & pagination endpoints.
 
 The low-level DB seams (``console.fetch_all`` / ``console.fetch_one``) are
@@ -117,7 +123,7 @@ def test_columns_embeddable_flag(patched, client):
     assert resp.status_code == 200
     cols = resp.json()["columns"]
     by_name = {c["name"]: c for c in cols}
-    assert by_name["id"]["embeddable"] is False
+    assert by_name["id"]["embeddable"] is True  # int (numeric now embeddable)
     assert by_name["name"]["embeddable"] is True  # varchar
     assert by_name["bio"]["embeddable"] is True  # text
 

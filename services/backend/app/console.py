@@ -1,3 +1,9 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ milvus_station                                                           │
+# │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+# │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+# └──────────────────────────────────────────────────────────────────────────┘
+
 """Data-console DB introspection & pagination (MariaDB via PyMySQL).
 
 This module powers the read-only "data console" browse endpoints. It
@@ -35,8 +41,20 @@ SYSTEM_SCHEMAS: frozenset[str] = frozenset(
 )
 
 # Column data types whose contents are meaningful to embed as text.
+# Column types offered for embedding. Text types carry natural-language
+# meaning; numeric/temporal types are also allowed so they can be included as
+# labelled "column: value" context in the combined embedding text (e.g. a
+# movie's year or rating alongside its title and overview).
 EMBEDDABLE_TYPES: frozenset[str] = frozenset(
-    {"char", "varchar", "text", "tinytext", "mediumtext", "longtext", "json"}
+    {
+        # text
+        "char", "varchar", "text", "tinytext", "mediumtext", "longtext", "json",
+        # numeric
+        "tinyint", "smallint", "mediumint", "int", "integer", "bigint",
+        "decimal", "numeric", "float", "double", "real", "bit",
+        # temporal
+        "year", "date", "datetime", "timestamp", "time",
+    }
 )
 
 DEFAULT_PAGE_SIZE = 25
@@ -312,6 +330,36 @@ def read_pk_text(
     text_q = quote_ident(text_column)
     rows = fetch_all(
         f"SELECT {pk_q} AS pk, {text_q} AS text FROM {qualified} LIMIT %s",
+        (int(limit),),
+        settings,
+    )
+    return rows
+
+
+def read_pk_columns(
+    db: str,
+    table: str,
+    pk_column: str,
+    columns: list[str],
+    limit: int = 1000,
+    settings: Settings | None = None,
+) -> list[dict[str, Any]]:
+    """Read ``pk`` plus each of ``columns`` from a validated table.
+
+    Every identifier (db, table, pk, and each column) is backtick-quoted;
+    the limit is a bound integer parameter. Each returned row is a dict
+    ``{"pk": ..., "<col>": ..., ...}`` keyed by the original column names,
+    so callers can combine several fields into one text before embedding.
+    """
+    qualified = f"{quote_ident(db)}.{quote_ident(table)}"
+    pk_q = quote_ident(pk_column)
+    # Alias each selected column to its own name so the result dict is keyed
+    # by the original column name (independent of any AS the driver applies).
+    select_cols = ", ".join(
+        f"{quote_ident(col)} AS {quote_ident(col)}" for col in columns
+    )
+    rows = fetch_all(
+        f"SELECT {pk_q} AS pk, {select_cols} FROM {qualified} LIMIT %s",
         (int(limit),),
         settings,
     )
