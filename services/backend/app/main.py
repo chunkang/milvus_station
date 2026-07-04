@@ -14,7 +14,7 @@ Out of scope (DEFERRED to SPEC-SEARCH-002): ``/api/embed`` and
 
 from __future__ import annotations
 
-from fastapi import APIRouter, FastAPI, Query
+from fastapi import APIRouter, FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from . import __version__, console, samples, vectors
@@ -57,6 +57,13 @@ class IndexRequest(BaseModel):
     table: str
     column: str
     id_column: str | None = None
+
+
+class SearchRequest(BaseModel):
+    """Request body for POST /milvus/collections/{name}/search."""
+
+    query: str
+    top_k: int = 5
 
 
 @router.get("/databases")
@@ -114,6 +121,20 @@ def get_milvus_collection_rows(
 ) -> dict[str, object]:
     """Return a paginated slice of a Milvus collection's rows."""
     return vectors.query_collection(name, page=page, page_size=page_size)
+
+
+@router.post("/milvus/collections/{name}/search")
+def post_milvus_search(name: str, body: SearchRequest) -> dict[str, object]:
+    """Semantic search over a Milvus collection.
+
+    Prefers HTTP 400 for a missing/blank query; all other failures
+    (Ollama or Milvus unreachable, model not pulled, missing collection)
+    are returned as HTTP 200 with ``status: error`` by
+    :func:`app.vectors.search_collection`.
+    """
+    if not body.query or not body.query.strip():
+        raise HTTPException(status_code=400, detail="query is required")
+    return vectors.search_collection(name, body.query, body.top_k)
 
 
 @router.post("/databases/{db}/samples/import")

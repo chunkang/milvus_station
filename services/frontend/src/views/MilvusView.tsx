@@ -1,6 +1,6 @@
 // Milvus view: list collections -> browse a collection's entities.
 import { useEffect, useState } from "react";
-import { Layers, TriangleAlert, WifiOff } from "lucide-react";
+import { Layers, Search, TriangleAlert, WifiOff } from "lucide-react";
 import {
   getCollections,
   getCollectionData,
@@ -8,6 +8,7 @@ import {
   type CollectionDataResponse,
 } from "../api";
 import DataTable from "../components/DataTable";
+import SearchTestModal from "../components/SearchTestModal";
 import {
   Card,
   CardContent,
@@ -42,6 +43,7 @@ export default function MilvusView() {
   const [dataError, setDataError] = useState<string | null>(null);
   const [dataUnreachable, setDataUnreachable] = useState(false);
   const [page, setPage] = useState(1);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -173,7 +175,18 @@ export default function MilvusView() {
       {active && (
         <Card className="mt-6">
           <CardHeader>
-            <CardTitle className="text-base">{active}</CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-base">{active}</CardTitle>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Search className="size-4" />
+                Test
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             {dataUnreachable && (
@@ -206,6 +219,14 @@ export default function MilvusView() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {active && (
+        <SearchTestModal
+          collection={active}
+          open={searchOpen}
+          onOpenChange={setSearchOpen}
+        />
       )}
     </section>
   );

@@ -85,6 +85,21 @@ export interface CollectionDataResponse {
   status?: "unreachable";
 }
 
+export interface SearchResult {
+  pk: number;
+  text: string;
+  score: number;
+}
+
+export interface SearchResponse {
+  collection: string;
+  query: string;
+  top_k: number;
+  results: SearchResult[];
+  status?: string;
+  message?: string;
+}
+
 // ---------- Core request helper ----------
 
 /**
@@ -191,5 +206,20 @@ export function getCollectionData(
 ): Promise<CollectionDataResponse> {
   return request<CollectionDataResponse>(
     `/api/milvus/collections/${enc(name)}?page=${page}&page_size=${pageSize}`
+  );
+}
+
+export function searchCollection(
+  name: string,
+  query: string,
+  topK = 5
+): Promise<SearchResponse> {
+  return request<SearchResponse>(
+    `/api/milvus/collections/${enc(name)}/search`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, top_k: topK }),
+    }
   );
 }

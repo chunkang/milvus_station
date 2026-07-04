@@ -323,6 +323,109 @@ def _format_cell(value: Any) -> Any:
     return console.jsonify(value)
 
 
+DEFAULT_TOP_K = 5
+MAX_TOP_K = 50
+
+
+def _clamp_top_k(top_k: int) -> int:
+    """Coerce ``top_k`` to an int in the inclusive range 1..MAX_TOP_K."""
+    try:
+        value = int(top_k)
+    except (TypeError, ValueError):
+        return DEFAULT_TOP_K
+    if value < 1:
+        return DEFAULT_TOP_K
+    return min(value, MAX_TOP_K)
+
+
+def search_collection(
+    name: str,
+    query: str,
+    top_k: int = DEFAULT_TOP_K,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Semantic search over a Milvus collection for a natural-language query.
+
+    The query text is embedded via :func:`embed_text` (Ollama) and the
+    resulting vector is searched against the collection's ``embedding``
+    field using COSINE similarity. Results are returned best-first.
+
+    Like the rest of this module, every failure is converted into a
+    structured ``{"status": "error", ...}`` payload so the route always
+    answers HTTP 200 rather than 500:
+
+    * empty / whitespace-only query -> ``"query is required"``
+    * model-not-pulled / Ollama unreachable -> the :class:`EmbeddingError`
+      message forwarded verbatim (same friendly text as ``build_index``)
+    * Milvus unreachable / missing collection -> a clear message
+    """
+    settings = settings or get_settings()
+    top_k = _clamp_top_k(top_k)
+    base = {"collection": name, "query": query, "top_k": top_k}
+
+    if not query or not query.strip():
+        return {**base, "results": [], "status": "error", "message": "query is required"}
+
+    # --- embed the query (typed failures -> forwarded message) ---
+    try:
+        query_vector = embed_text(query, settings)
+    except EmbeddingError as exc:
+        return {**base, "results": [], "status": "error", "message": str(exc)}
+
+    # --- search Milvus (any failure -> friendly error, never a 500) ---
+    try:
+        from pymilvus import Collection, connections, utility  # lazy import
+
+        connections.connect(
+            alias="default",
+            host=settings.milvus_host,
+            port=str(settings.milvus_port),
+        )
+
+        if not utility.has_collection(name):
+            return {
+                **base,
+                "results": [],
+                "status": "error",
+                "message": f"collection '{name}' not found",
+            }
+
+        coll = Collection(name)
+        coll.load()
+
+        search_result = coll.search(
+            data=[query_vector],
+            anns_field="embedding",
+            param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+            limit=top_k,
+            output_fields=["pk", "text"],
+        )
+
+        hits = search_result[0] if search_result else []
+        results: list[dict[str, Any]] = []
+        for hit in hits:
+            entity = getattr(hit, "entity", None)
+            pk = getattr(hit, "id", None)
+            if pk is None and entity is not None:
+                pk = entity.get("pk")
+            text = entity.get("text") if entity is not None else None
+            score = getattr(hit, "distance", None)
+            if score is None:
+                score = getattr(hit, "score", 0.0)
+            results.append(
+                {"pk": int(pk), "text": text, "score": float(score)}
+            )
+
+        return {**base, "results": results, "status": "ok"}
+    except Exception as exc:  # Milvus unreachable or any other failure
+        return {
+            **base,
+            "results": [],
+            "status": "error",
+            "message": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def query_collection(
     name: str,
     page: int = 1,

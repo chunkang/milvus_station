@@ -63,4 +63,29 @@ describe("MilvusView", () => {
       expect(mockedApi.getCollectionData).toHaveBeenCalledWith("docs", 1, 25)
     );
   });
+
+  it("shows a Test button next to the collection name that opens the search dialog", async () => {
+    mockedApi.getCollections.mockResolvedValue({
+      collections: [{ name: "docs", count: 5 }],
+    });
+    mockedApi.getCollectionData.mockResolvedValue({
+      collection: "docs",
+      page: 1,
+      page_size: 25,
+      total: 1,
+      fields: ["id", "text"],
+      rows: [{ id: 1, text: "hello" }],
+    });
+
+    render(<MilvusView />);
+    fireEvent.click(await screen.findByRole("button", { name: /docs/ }));
+
+    const testButton = await screen.findByRole("button", { name: /test/i });
+    expect(testButton).toBeInTheDocument();
+
+    fireEvent.click(testButton);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText(/query text/i)).toBeInTheDocument();
+  });
 });

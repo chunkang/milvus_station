@@ -47,6 +47,29 @@ def _model_not_found_post(url, json=None, timeout=None):
     )
 
 
+class _FakeEntity:
+    """Minimal stand-in for a pymilvus hit entity (``.get(field)``)."""
+
+    def __init__(self, fields):
+        self._fields = fields
+
+    def get(self, key, default=None):
+        return self._fields.get(key, default)
+
+
+class _FakeHit:
+    """Minimal stand-in for a pymilvus search hit.
+
+    Exposes ``.id`` and ``.distance`` plus an ``.entity`` with ``.get``,
+    mirroring the attributes ``search_collection`` reads.
+    """
+
+    def __init__(self, pk, text, score):
+        self.id = pk
+        self.distance = score
+        self.entity = _FakeEntity({"pk": pk, "text": text})
+
+
 def _make_fake_pymilvus(record, connect_error=False):
     mod = types.ModuleType("pymilvus")
 
@@ -108,6 +131,24 @@ def _make_fake_pymilvus(record, connect_error=False):
             # view can surface it (truncated to a preview by the endpoint).
             return [{"pk": 1, "embedding": [0.1] * 768, "text": "hello"}]
 
+        def search(
+            self, data, anns_field, param, limit, output_fields=None
+        ):
+            record["search"] = {
+                "data": data,
+                "anns_field": anns_field,
+                "param": param,
+                "limit": limit,
+                "output_fields": output_fields,
+            }
+            # Two hits, already ranked best-first (higher COSINE = closer).
+            return [
+                [
+                    _FakeHit(pk=3, text="how to reset your password", score=0.91),
+                    _FakeHit(pk=1, text="account settings overview", score=0.72),
+                ]
+            ]
+
     class connections:
         @staticmethod
         def connect(**kw):
@@ -118,7 +159,7 @@ def _make_fake_pymilvus(record, connect_error=False):
     class utility:
         @staticmethod
         def has_collection(name):
-            return False
+            return True
 
         @staticmethod
         def drop_collection(name):
@@ -323,3 +364,111 @@ def test_collection_rows_success(monkeypatch, client):
     # the 768-dim vector is truncated to a readable preview, not dumped whole
     assert "768 dims" in row["embedding"]
     assert row["embedding"].startswith("[0.1000, 0.1000")
+
+
+# --------------------------------------------------------------------------
+# Semantic search
+# --------------------------------------------------------------------------
+def test_search_success_returns_ranked_results(monkeypatch, ok_ollama, client):
+    """POST /search embeds the query and returns ranked {pk,text,score}."""
+    record = {}
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus(record))
+
+    resp = client.post(
+        "/milvus/collections/milvus_station_faqs/search",
+        json={"query": "reset password", "top_k": 3},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["collection"] == "milvus_station_faqs"
+    assert body["query"] == "reset password"
+    assert body["top_k"] == 3
+
+    results = body["results"]
+    assert isinstance(results, list)
+    assert all(set(r) == {"pk", "text", "score"} for r in results)
+    # ranked best-first, exactly as returned by the (fake) search
+    assert [r["pk"] for r in results] == [3, 1]
+    assert [r["score"] for r in results] == [0.91, 0.72]
+    assert results[0]["text"] == "how to reset your password"
+
+    # searched with COSINE metric and the requested limit
+    assert record["search"]["param"]["metric_type"] == "COSINE"
+    assert record["search"]["limit"] == 3
+    assert record["search"]["anns_field"] == "embedding"
+
+
+def test_search_top_k_clamped_to_50(monkeypatch, ok_ollama, client):
+    record = {}
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus(record))
+    resp = client.post(
+        "/milvus/collections/milvus_station_faqs/search",
+        json={"query": "anything", "top_k": 999},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["top_k"] == 50
+    assert record["search"]["limit"] == 50
+
+
+def test_search_model_not_pulled_returns_200_error(monkeypatch, client):
+    """A 404 from Ollama (model not pulled) -> HTTP 200 status:error with a
+    clear message mentioning the model and pull guidance."""
+    monkeypatch.setattr(vectors.httpx, "post", _model_not_found_post)
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus({}))
+
+    resp = client.post(
+        "/milvus/collections/milvus_station_faqs/search",
+        json={"query": "reset password", "top_k": 3},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["results"] == []
+    assert "nomic-embed-text" in body["message"]
+    assert "pull" in body["message"].lower()
+
+
+def test_search_empty_query_returns_400(client):
+    """A blank query is a client error -> HTTP 400."""
+    resp = client.post(
+        "/milvus/collections/milvus_station_faqs/search",
+        json={"query": "   ", "top_k": 3},
+    )
+    assert resp.status_code == 400
+
+
+def test_search_missing_collection_returns_error(monkeypatch, ok_ollama, client):
+    """When the collection does not exist -> status:error, HTTP 200."""
+    record = {}
+    fake = _make_fake_pymilvus(record)
+    fake.utility.has_collection = staticmethod(lambda name: False)
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    resp = client.post(
+        "/milvus/collections/does_not_exist/search",
+        json={"query": "hello"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["results"] == []
+    assert "not found" in body["message"].lower()
+    # default top_k applied when omitted
+    assert body["top_k"] == 5
+
+
+def test_search_milvus_unreachable_returns_error(monkeypatch, ok_ollama, client):
+    monkeypatch.setitem(
+        sys.modules, "pymilvus", _make_fake_pymilvus({}, connect_error=True)
+    )
+    resp = client.post(
+        "/milvus/collections/milvus_station_faqs/search",
+        json={"query": "hello"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["results"] == []
