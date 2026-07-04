@@ -53,6 +53,18 @@ export interface IndexResponse {
   message?: string;
 }
 
+export interface SampleTableResult {
+  name: string;
+  created: boolean;
+  rows: number;
+}
+
+export interface ImportSamplesResponse {
+  status: "ok" | "error";
+  database: string;
+  tables: SampleTableResult[];
+}
+
 export interface CollectionInfo {
   name: string;
   count: number;
@@ -152,6 +164,18 @@ export function indexToMilvus(payload: IndexRequest): Promise<IndexResponse> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+export function importSamples(
+  database: string
+): Promise<ImportSamplesResponse> {
+  return request<ImportSamplesResponse>(
+    `/api/databases/${enc(database)}/samples/import`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
 }
 
 // ---------- Milvus endpoints ----------

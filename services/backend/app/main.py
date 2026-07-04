@@ -17,7 +17,7 @@ from __future__ import annotations
 from fastapi import APIRouter, FastAPI, Query
 from pydantic import BaseModel
 
-from . import __version__, console, vectors
+from . import __version__, console, samples, vectors
 from .health import gather_health
 
 app = FastAPI(
@@ -114,6 +114,16 @@ def get_milvus_collection_rows(
 ) -> dict[str, object]:
     """Return a paginated slice of a Milvus collection's rows."""
     return vectors.query_collection(name, page=page, page_size=page_size)
+
+
+@router.post("/databases/{db}/samples/import")
+def post_import_samples(db: str) -> dict[str, object]:
+    """Create & seed the fixed sample tables in the application database.
+
+    Restricted to the configured application database; any other ``db``
+    returns HTTP 400. Idempotent (safe to call repeatedly).
+    """
+    return samples.import_samples(db)
 
 
 # Mount twice so both /... and /api/... resolve (nginx may strip /api).

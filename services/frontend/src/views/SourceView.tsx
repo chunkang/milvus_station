@@ -1,11 +1,20 @@
 // Source view: browse MySQL databases -> tables -> table rows.
 // Provides an "Index to Milvus" action per table (opens IndexModal).
 import { useEffect, useState } from "react";
-import { Database, Sparkles, Table2, TriangleAlert } from "lucide-react";
+import {
+  Database,
+  DownloadCloud,
+  Loader2,
+  Sparkles,
+  Table2,
+  TriangleAlert,
+} from "lucide-react";
+import { toast } from "sonner";
 import {
   getDatabases,
   getTables,
   getRows,
+  importSamples,
   type TableInfo,
   type RowsResponse,
 } from "../api";
@@ -26,6 +35,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 25;
+
+// The application's own schema database. Sample tables can only be imported here.
+const APP_DATABASE = "milvus_station";
 
 function ErrorAlert({ message }: { message: string }) {
   return (
@@ -71,6 +83,9 @@ export default function SourceView() {
     table: string;
   } | null>(null);
 
+  // Sample import
+  const [importing, setImporting] = useState(false);
+
   // Load databases on mount.
   useEffect(() => {
     let active = true;
@@ -86,14 +101,10 @@ export default function SourceView() {
     };
   }, []);
 
-  function selectDatabase(db: string) {
-    setActiveDb(db);
-    setActiveTable(null);
-    setRows(null);
-    setTables(null);
+  function refreshTables(db: string) {
     setTablesError(null);
     setTablesLoading(true);
-    getTables(db)
+    return getTables(db)
       .then((res) => {
         setTables(res.tables);
       })
@@ -101,6 +112,34 @@ export default function SourceView() {
         setTablesError(err instanceof Error ? err.message : String(err))
       )
       .finally(() => setTablesLoading(false));
+  }
+
+  function selectDatabase(db: string) {
+    setActiveDb(db);
+    setActiveTable(null);
+    setRows(null);
+    setTables(null);
+    refreshTables(db);
+  }
+
+  function handleImportSamples() {
+    if (!activeDb) return;
+    setImporting(true);
+    importSamples(activeDb)
+      .then((res) => {
+        const names = res.tables.map((t) => t.name).join(", ");
+        toast.success(
+          `Imported ${res.tables.length} sample ${
+            res.tables.length === 1 ? "table" : "tables"
+          }${names ? `: ${names}` : ""}`
+        );
+        // Re-fetch tables so the newly imported ones appear.
+        return refreshTables(activeDb);
+      })
+      .catch((err: unknown) =>
+        toast.error(err instanceof Error ? err.message : String(err))
+      )
+      .finally(() => setImporting(false));
   }
 
   function loadRows(db: string, table: string, nextPage: number) {
@@ -179,14 +218,35 @@ export default function SourceView() {
         {/* Tables column */}
         <Card className={cn(!activeDb && "hidden md:block")}>
           <CardHeader>
-            <CardTitle className="text-sm">
-              {activeDb ? `Tables in ${activeDb}` : "Tables"}
-            </CardTitle>
-            <CardDescription>
-              {activeDb
-                ? "Select a table to preview rows, or index a column."
-                : "Pick a database to see its tables."}
-            </CardDescription>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex flex-col gap-1.5">
+                <CardTitle className="text-sm">
+                  {activeDb ? `Tables in ${activeDb}` : "Tables"}
+                </CardTitle>
+                <CardDescription>
+                  {activeDb
+                    ? "Select a table to preview rows, or index a column."
+                    : "Pick a database to see its tables."}
+                </CardDescription>
+              </div>
+              {activeDb === APP_DATABASE && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={handleImportSamples}
+                  disabled={importing}
+                >
+                  {importing ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <DownloadCloud className="size-4" />
+                  )}
+                  {importing ? "Importing…" : "Import sample tables"}
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             {!activeDb && (
