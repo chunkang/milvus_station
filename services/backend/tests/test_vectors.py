@@ -98,8 +98,15 @@ def _make_fake_pymilvus(record, connect_error=False):
             return 2
 
         def query(self, expr, offset=0, limit=10, output_fields=None):
-            record["query"] = {"expr": expr, "offset": offset, "limit": limit}
-            return [{"pk": 1, "text": "hello"}]
+            record["query"] = {
+                "expr": expr,
+                "offset": offset,
+                "limit": limit,
+                "output_fields": output_fields,
+            }
+            # A realistic row now includes the embedding vector so the browse
+            # view can surface it (truncated to a preview by the endpoint).
+            return [{"pk": 1, "embedding": [0.1] * 768, "text": "hello"}]
 
     class connections:
         @staticmethod
@@ -306,6 +313,13 @@ def test_collection_rows_success(monkeypatch, client):
     body = resp.json()
     assert body["collection"] == "shop_users"
     assert body["total"] == 2
-    # embedding (FLOAT_VECTOR) excluded from output fields
-    assert "embedding" not in body["fields"]
-    assert body["rows"] == [{"pk": 1, "text": "hello"}]
+    # embedding (FLOAT_VECTOR) is now INCLUDED so users can inspect vectors,
+    # and the endpoint requested it as an output field.
+    assert body["fields"] == ["pk", "embedding", "text"]
+    assert "embedding" in record["query"]["output_fields"]
+    row = body["rows"][0]
+    assert row["pk"] == 1
+    assert row["text"] == "hello"
+    # the 768-dim vector is truncated to a readable preview, not dumped whole
+    assert "768 dims" in row["embedding"]
+    assert row["embedding"].startswith("[0.1000, 0.1000")

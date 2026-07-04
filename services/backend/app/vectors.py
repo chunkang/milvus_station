@@ -263,6 +263,13 @@ def _create_and_insert(
     schema = CollectionSchema(fields, description=f"embeddings for {collection}")
     coll = Collection(name=collection, schema=schema)
 
+    # Order matters: insert + flush FIRST so the segment is sealed, THEN build
+    # the index and load. Loading before the data is inserted/flushed leaves the
+    # freshly inserted vectors unqueryable for a moment, so a browse immediately
+    # after /index can read as empty. Doing it in this order guarantees the
+    # collection is fully queryable by the time /index returns.
+    coll.insert([pks, vectors, texts])
+    coll.flush()
     coll.create_index(
         field_name="embedding",
         index_params={
@@ -272,8 +279,6 @@ def _create_and_insert(
         },
     )
     coll.load()
-    coll.insert([pks, vectors, texts])
-    coll.flush()
 
 
 def list_collections(settings: Settings | None = None) -> dict[str, Any]:
@@ -300,6 +305,24 @@ def list_collections(settings: Settings | None = None) -> dict[str, Any]:
         return {"collections": [], "status": "unreachable"}
 
 
+def _format_cell(value: Any) -> Any:
+    """Format a Milvus field value for display.
+
+    Long numeric vectors (e.g. a 768-dim embedding) are truncated to a short,
+    readable preview — ``[0.1288, 0.2844, … (768 dims)]`` — rather than dumping
+    every component into the table. All other values pass through
+    :func:`app.console.jsonify` unchanged.
+    """
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) > 12
+        and all(isinstance(x, (int, float)) for x in value)
+    ):
+        head = ", ".join(f"{float(x):.4f}" for x in value[:8])
+        return f"[{head}, … ({len(value)} dims)]"
+    return console.jsonify(value)
+
+
 def query_collection(
     name: str,
     page: int = 1,
@@ -323,13 +346,11 @@ def query_collection(
         coll.load()
         total = int(coll.num_entities)
 
-        # Non-vector output fields only (skip FLOAT_VECTOR / BINARY_VECTOR).
-        field_names: list[str] = []
-        for field in coll.schema.fields:
-            dtype_name = str(getattr(field, "dtype", "")).upper()
-            if "VECTOR" in dtype_name:
-                continue
-            field_names.append(field.name)
+        # Output ALL fields, including the embedding vector, so users can
+        # actually inspect the stored vectors in the browser. Long vectors are
+        # truncated to a readable preview (see ``_format_cell``) to keep the
+        # payload and the table sane.
+        field_names: list[str] = [f.name for f in coll.schema.fields]
 
         rows = coll.query(
             expr="pk >= 0",
@@ -338,7 +359,7 @@ def query_collection(
             output_fields=field_names,
         )
         clean_rows = [
-            {k: console.jsonify(v) for k, v in row.items()} for row in rows
+            {k: _format_cell(v) for k, v in row.items()} for row in rows
         ]
         return {
             "collection": name,
