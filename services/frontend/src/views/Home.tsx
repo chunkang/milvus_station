@@ -130,18 +130,18 @@ const USAGE: { icon: Icon; title: string; steps: string[] }[] = [
     icon: Database,
     title: "Source",
     steps: [
-      "Browse MariaDB databases and tables.",
+      "Browse MariaDB databases, tables and records with pagination.",
       "Import the bundled sample tables for milvus_station.",
-      "Index any text column into Milvus.",
-      "Test semantic search against the indexed column.",
+      "Index one or more columns into Milvus (multi-select) — the chosen columns, numeric fields included, are combined into a single text per row before embedding.",
+      "Use Test on a table with an indexed collection to run a semantic search.",
     ],
   },
   {
     icon: Boxes,
     title: "Milvus",
     steps: [
-      "Browse existing vector collections and their entities.",
-      "Run a test search to preview meaning-based matches.",
+      "Browse existing collections and their vectors, with each embedding shown as a truncated preview.",
+      "Use Test to run a semantic search returning ranked results with scores.",
     ],
   },
   {
@@ -202,15 +202,19 @@ export default function Home() {
           <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
             <p>
               You store text in MySQL/MariaDB, then generate embeddings for it
-              with a Llama model running locally through Ollama. Those vectors
-              are indexed in Milvus, giving you fast semantic — meaning-based —
-              similarity search instead of plain keyword matching.
+              with a Llama model running locally through Ollama. You can combine
+              several fields into one embedding — for example a movie's title,
+              overview and actors merged into a single text per row. Those
+              vectors are indexed in Milvus, giving you fast semantic —
+              meaning-based — similarity search instead of plain keyword
+              matching.
             </p>
             <p>
-              Everything is browsable from this console: pick a source column,
-              index it, and immediately test how well semantic search retrieves
-              related rows. No cloud services, no external calls — the whole
-              pipeline runs inside one self-contained Docker stack.
+              Everything is browsable from this console: pick one or more source
+              columns, index them, and immediately test how well semantic search
+              retrieves related rows by meaning. No cloud services, no external
+              calls — the whole pipeline runs inside one self-contained Docker
+              stack.
             </p>
           </CardContent>
         </Card>

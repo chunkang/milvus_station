@@ -107,14 +107,20 @@ The three-menu console drives the whole pipeline:
 - **Main** — overview of the tool and its architecture.
 - **Source** — browse databases → tables → paginated records. For the
   `milvus_station` database an **Import sample tables** button seeds demo data.
-  Each table has an **Index to Milvus** button (embed a column into a collection),
-  and a **Test** button appears once a table has an indexed collection.
-- **Milvus** — browse collections and page through their stored vectors; a
-  **Test** button runs a semantic search against the collection.
+  Each table has an **Index to Milvus** button where you pick **one or more
+  columns** (multi-select) — including numeric/temporal fields — which are
+  combined into a single labelled text per row (`column: value`) before
+  embedding. A **Test** button appears once a table has an indexed collection.
+- **Milvus** — browse collections and page through their stored vectors (each
+  embedding shown as a truncated preview); a **Test** button runs a semantic
+  search returning ranked results with scores.
 - **mysqladmin** — opens phpMyAdmin (`/mysql`) in a new tab.
 
-**Typical flow:** Import sample tables → pick a table → *Index to Milvus* (choose
-a text column) → *Test* → type a natural-language query → see ranked matches.
+**Typical flow:** Import sample tables → pick a table → *Index to Milvus*
+(select one or more columns) → *Test* → type a natural-language query → see
+ranked matches by meaning. For example, indexing a movie's `title + overview +
+actors` together lets a search for *"a hopeful prison friendship"* surface
+*The Shawshank Redemption*.
 
 ## Sample data
 
