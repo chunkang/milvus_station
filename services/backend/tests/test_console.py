@@ -177,3 +177,52 @@ def test_injection_identifier_in_database_rejected(patched, client):
     malicious = "shop; DROP TABLE users"
     resp = client.get(f"/databases/{malicious}/tables")
     assert resp.status_code in (400, 404)
+
+
+def test_read_rows_by_pks_binds_placeholders_and_keys_by_pk(patched):
+    """``read_rows_by_pks`` resolves full source rows for a set of primary keys.
+
+    Every pk is passed as a *bound* parameter (one ``%s`` per pk, never
+    interpolated) and the result is keyed by the integer pk with jsonified
+    column values covering every column of the row.
+    """
+    result = console.read_rows_by_pks("shop", "users", "id", [1, 2])
+
+    # keyed by integer pk, full row present (all columns, jsonified)
+    assert set(result) == {1, 2}
+    assert result[1] == {"id": 1, "name": "Alice", "bio": "hello"}
+    assert result[2] == {"id": 2, "name": "Bob", "bio": "world"}
+
+    # one bound placeholder per pk; the pks arrive as params, never in SQL text
+    select_calls = [
+        c for c in patched["fetch_all"]
+        if c[0].startswith("SELECT * FROM") and "WHERE" in c[0]
+    ]
+    assert select_calls, "read_rows_by_pks select never executed"
+    sql, params = select_calls[-1]
+    assert "IN (%s, %s)" in sql
+    assert params == (1, 2)
+
+
+def test_read_rows_by_pks_empty_pks_returns_empty_without_query(patched):
+    """An empty pk list short-circuits to ``{}`` without touching the DB."""
+    result = console.read_rows_by_pks("shop", "users", "id", [])
+    assert result == {}
+    assert not any(
+        c[0].startswith("SELECT * FROM") and "WHERE" in c[0]
+        for c in patched["fetch_all"]
+    )
+
+
+def test_read_rows_by_pks_unknown_column_rejected(patched):
+    """An unknown pk column is rejected (404) before any data query runs."""
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    with _pytest.raises(HTTPException) as exc:
+        console.read_rows_by_pks("shop", "users", "ghost", [1])
+    assert exc.value.status_code == 404
+    assert not any(
+        c[0].startswith("SELECT * FROM") and "WHERE" in c[0]
+        for c in patched["fetch_all"]
+    )

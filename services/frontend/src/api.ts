@@ -96,6 +96,9 @@ export interface SearchResult {
   pk: number;
   text: string;
   score: number;
+  // Full source row from MariaDB, when the collection carries it.
+  // Absent for older collections that only stored the combined text.
+  source?: Record<string, unknown>;
 }
 
 export interface SearchResponse {

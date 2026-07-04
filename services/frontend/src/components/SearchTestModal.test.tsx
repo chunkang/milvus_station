@@ -23,13 +23,23 @@ describe("SearchTestModal", () => {
     });
   });
 
-  it("runs a search and renders ranked results", async () => {
+  it("runs a search and renders ranked results with source fields", async () => {
     mockedApi.searchCollection.mockResolvedValue({
       collection: "docs",
       query: "hello",
       top_k: 5,
       results: [
-        { pk: 1, text: "best match", score: 0.9876 },
+        {
+          pk: 1,
+          text: "The Shawshank Redemption | Two imprisoned men...",
+          score: 0.9876,
+          source: {
+            title: "The Shawshank Redemption",
+            actors: "Tim Robbins, Morgan Freeman",
+            year: 1994,
+          },
+        },
+        // No `source` on this one: should fall back to the raw text.
         { pk: 2, text: "second match", score: 0.4321 },
       ],
     });
@@ -52,7 +62,15 @@ describe("SearchTestModal", () => {
       )
     );
 
-    expect(await screen.findByText("best match")).toBeInTheDocument();
+    // Source fields are rendered as a key -> value list.
+    expect(
+      await screen.findByText("The Shawshank Redemption")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Tim Robbins, Morgan Freeman")
+    ).toBeInTheDocument();
+    expect(screen.getByText("actors")).toBeInTheDocument();
+    // The result without a `source` still shows its combined text.
     expect(screen.getByText("second match")).toBeInTheDocument();
     expect(screen.getByText("0.9876")).toBeInTheDocument();
   });

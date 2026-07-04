@@ -25,6 +25,7 @@ allow-list before any live query is built.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -297,7 +298,16 @@ def build_index(
             for nf in num_cols
         ]
         _create_and_insert(
-            collection, dim, pks, vectors, texts, numeric_fields, settings
+            collection,
+            dim,
+            pks,
+            vectors,
+            texts,
+            numeric_fields,
+            settings,
+            database=database,
+            table=table,
+            pk_column=pk_column,
         )
 
         return {
@@ -346,6 +356,9 @@ def _create_and_insert(
     texts: list[str],
     numeric_fields: list[dict[str, Any]],
     settings: Settings,
+    database: str | None = None,
+    table: str | None = None,
+    pk_column: str | None = None,
 ) -> None:
     """Create/recreate a Milvus collection and insert the vectors.
 
@@ -353,6 +366,13 @@ def _create_and_insert(
     ``{"name": <sanitized>, "kind": "int"|"float", "values": [...]}`` describing
     the typed scalar fields to store alongside the embedding so search can
     filter on them. Each ``values`` list is aligned with ``pks``/``vectors``.
+
+    ``database``/``table``/``pk_column`` identify the source MariaDB row and are
+    persisted in the collection's schema ``description`` as a JSON blob so that
+    :func:`search_collection` can later resolve each hit back to its full source
+    row (see there). The collection name alone is ambiguous to reverse-parse
+    because database names may themselves contain underscores, so the source
+    coordinates are stored explicitly rather than re-derived.
 
     ``pymilvus`` is imported lazily so tests can supply a fake module.
     """
@@ -386,7 +406,13 @@ def _create_and_insert(
     for nf in numeric_fields:
         dtype = DataType.INT64 if nf["kind"] == "int" else DataType.DOUBLE
         fields.append(FieldSchema(name=nf["name"], dtype=dtype))
-    schema = CollectionSchema(fields, description=f"embeddings for {collection}")
+    # Persist the source coordinates so search can hydrate hits with the full
+    # originating MariaDB row (best-effort; older collections without this
+    # metadata simply skip hydration).
+    description = json.dumps(
+        {"database": database, "table": table, "pk_column": pk_column}
+    )
+    schema = CollectionSchema(fields, description=description)
     coll = Collection(name=collection, schema=schema)
 
     # Order matters: insert + flush FIRST so the segment is sealed, THEN build
@@ -538,6 +564,45 @@ def _clamp_top_k(top_k: int) -> int:
     return min(value, MAX_TOP_K)
 
 
+def _hydrate_sources(
+    coll: Any, results: list[dict[str, Any]], settings: Settings
+) -> None:
+    """Attach each search result's full source MariaDB row under ``source``.
+
+    The collection's schema ``description`` carries a JSON blob of
+    ``{"database", "table", "pk_column"}`` written at index time. We parse it,
+    resolve every result ``pk`` back to its originating row via
+    :func:`console.read_rows_by_pks`, and set ``result["source"]`` to that row's
+    ``{column: value}`` dict when found. Results whose pk is not found are left
+    without a ``source`` key.
+
+    This is strictly best-effort: a missing / non-JSON description (older
+    collections) or any failure (MariaDB unreachable, validation error, etc.)
+    is swallowed so a search never breaks just because hydration could not run.
+    """
+    if not results:
+        return
+    try:
+        description = getattr(getattr(coll, "schema", None), "description", "") or ""
+        meta = json.loads(description)
+        database = meta["database"]
+        table = meta["table"]
+        pk_column = meta["pk_column"]
+        if not (database and table and pk_column):
+            return
+        pks = [r["pk"] for r in results]
+        rows_by_pk = console.read_rows_by_pks(
+            database, table, pk_column, pks, settings
+        )
+        for result in results:
+            source = rows_by_pk.get(result["pk"])
+            if source is not None:
+                result["source"] = source
+    except Exception:
+        # best-effort: never let hydration break the search
+        return
+
+
 def search_collection(
     name: str,
     query: str,
@@ -659,6 +724,12 @@ def search_collection(
             results.append(
                 {"pk": int(pk), "text": text, "score": float(score)}
             )
+
+        # --- hydrate results with their full source MariaDB row (best-effort) ---
+        # The source coordinates were stored in the schema description at index
+        # time. If they are missing / not JSON (older collections) or MariaDB is
+        # unreachable, we silently skip hydration so search still returns hits.
+        _hydrate_sources(coll, results, settings)
 
         out = {**base, "results": results, "status": "ok"}
         if filters:

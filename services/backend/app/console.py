@@ -405,3 +405,45 @@ def read_pk_columns(
         settings,
     )
     return rows
+
+
+def read_rows_by_pks(
+    db: str,
+    table: str,
+    pk_column: str,
+    pks: Sequence[Any],
+    settings: Settings | None = None,
+) -> dict[int, dict[str, Any]]:
+    """Fetch full source rows for the given primary-key values.
+
+    Used to hydrate Milvus search hits with the complete originating MariaDB
+    row so the UI can display any column (e.g. ``actors``) regardless of which
+    columns were embedded. ``db``/``table``/``pk_column`` are validated against
+    information_schema and backtick-quoted; every pk is passed as a *bound*
+    parameter (one ``%s`` placeholder each) -- never interpolated -- so this is
+    safe against injection even though it selects every column.
+
+    Returns a mapping ``{pk (int) -> {column: jsonified value}}`` covering each
+    row found. An empty ``pks`` yields ``{}`` without touching the database.
+    """
+    validate_database(db, settings)
+    validate_table(db, table, settings)
+    validate_column(db, table, pk_column, settings)
+
+    if not pks:
+        return {}
+
+    qualified = f"{quote_ident(db)}.{quote_ident(table)}"
+    pk_q = quote_ident(pk_column)
+    placeholders = ", ".join(["%s"] * len(pks))
+    rows = fetch_all(
+        f"SELECT * FROM {qualified} WHERE {pk_q} IN ({placeholders})",
+        tuple(pks),
+        settings,
+    )
+
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        pk_value = int(row[pk_column])
+        result[pk_value] = {col: jsonify(val) for col, val in row.items()}
+    return result

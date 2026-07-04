@@ -67,6 +67,16 @@ function newRow(field: string): FilterRow {
   return { field, op: "gte", value: "" };
 }
 
+// Render a single source value as a tidy string, truncating long text so the
+// results list stays compact.
+function formatSourceValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  const str =
+    typeof value === "object" ? JSON.stringify(value) : String(value);
+  const MAX = 120;
+  return str.length > MAX ? `${str.slice(0, MAX)}…` : str;
+}
+
 export default function SearchTestModal({
   collection,
   open,
@@ -314,8 +324,26 @@ export default function SearchTestModal({
                           #{i + 1}
                         </span>
                         <div className="min-w-0">
-                          <p className="break-words text-sm">{r.text}</p>
-                          <p className="text-xs text-muted-foreground">
+                          {r.source && Object.keys(r.source).length > 0 ? (
+                            <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-sm">
+                              {Object.entries(r.source).map(([key, value]) => (
+                                <div
+                                  key={key}
+                                  className="contents"
+                                >
+                                  <dt className="font-medium text-muted-foreground">
+                                    {key}
+                                  </dt>
+                                  <dd className="min-w-0 break-words">
+                                    {formatSourceValue(value)}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          ) : (
+                            <p className="break-words text-sm">{r.text}</p>
+                          )}
+                          <p className="mt-1 text-xs text-muted-foreground">
                             pk {r.pk}
                           </p>
                         </div>

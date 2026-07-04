@@ -76,7 +76,9 @@ class _FakeHit:
         self.entity = _FakeEntity({"pk": pk, "text": text})
 
 
-def _make_fake_pymilvus(record, connect_error=False, extra_fields=None):
+def _make_fake_pymilvus(
+    record, connect_error=False, extra_fields=None, schema_description=""
+):
     """Build a fake ``pymilvus`` module.
 
     ``extra_fields`` optionally augments the DEFAULT collection schema with
@@ -84,6 +86,12 @@ def _make_fake_pymilvus(record, connect_error=False, extra_fields=None):
     of the ``DataType`` string constants, e.g. ``"INT64"`` / ``"DOUBLE"``) — so
     tests that open ``Collection(name)`` (search / list_filter_fields) see
     filterable fields without first running ``build_index``.
+
+    ``schema_description`` sets the ``description`` on the DEFAULT schema exposed
+    by a freshly constructed ``Collection(name)`` (no explicit schema). Search
+    hydration reads this to discover the source ``{database, table, pk_column}``;
+    the default empty string mirrors an older collection with no such metadata,
+    so hydration is skipped and existing tests are unaffected.
     """
     mod = types.ModuleType("pymilvus")
 
@@ -105,8 +113,9 @@ def _make_fake_pymilvus(record, connect_error=False, extra_fields=None):
             self.description = description
 
     class _Schema:
-        def __init__(self, fields):
+        def __init__(self, fields, description=""):
             self.fields = fields
+            self.description = description
 
     _DEFAULT_FIELDS = [
         FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True),
@@ -127,7 +136,9 @@ def _make_fake_pymilvus(record, connect_error=False, extra_fields=None):
                     (f.name, f.dtype) for f in schema.fields
                 ]
             else:
-                self.schema = _Schema(list(_DEFAULT_FIELDS))
+                self.schema = _Schema(
+                    list(_DEFAULT_FIELDS), description=schema_description
+                )
 
         def create_index(self, field_name, index_params):
             record["index_params"] = index_params
@@ -771,3 +782,112 @@ def test_search_unknown_filter_op_returns_error(monkeypatch, ok_ollama, client):
     body = resp.json()
     assert body["status"] == "error"
     assert "unknown filter op" in body["message"]
+
+
+# --------------------------------------------------------------------------
+# Source-row hydration (search results enriched with the full MariaDB row)
+# --------------------------------------------------------------------------
+_SOURCE_META = '{"database": "movies_db", "table": "films", "pk_column": "id"}'
+
+
+def test_search_hydrates_results_with_source_row(monkeypatch, ok_ollama, client):
+    """A search hit is enriched with its full source MariaDB row under
+    ``source`` so the UI can show columns (e.g. ``actors``) that were never
+    embedded. The source coordinates come from the schema description written
+    at index time; the row is resolved by primary key via
+    ``console.read_rows_by_pks``.
+    """
+    record = {}
+    fake = _make_fake_pymilvus(record, schema_description=_SOURCE_META)
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    seen = {}
+
+    def _fake_read_rows_by_pks(db, table, pk_column, pks, settings=None):
+        seen["args"] = (db, table, pk_column, list(pks))
+        return {
+            1: {
+                "id": 1,
+                "title": "Shawshank",
+                "actors": "Tim Robbins, Morgan Freeman",
+                "year": 1994,
+            }
+        }
+
+    monkeypatch.setattr(console, "read_rows_by_pks", _fake_read_rows_by_pks)
+
+    resp = client.post(
+        "/milvus/collections/movies_db_films/search",
+        json={"query": "prison drama", "top_k": 3},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+
+    # hydration used the coordinates stored in the schema description
+    assert seen["args"][0] == "movies_db"
+    assert seen["args"][1] == "films"
+    assert seen["args"][2] == "id"
+    assert set(seen["args"][3]) == {3, 1}
+
+    by_pk = {r["pk"]: r for r in body["results"]}
+    # pk 1 resolved -> full source row present, including the un-embedded actors
+    assert by_pk[1]["source"]["actors"] == "Tim Robbins, Morgan Freeman"
+    assert by_pk[1]["source"]["title"] == "Shawshank"
+    assert by_pk[1]["source"]["year"] == 1994
+    # base search fields are still intact
+    assert by_pk[1]["text"] == "account settings overview"
+    assert by_pk[1]["score"] == 0.72
+    # pk 3 had no matching source row -> left without a ``source`` key
+    assert "source" not in by_pk[3]
+
+
+def test_search_hydration_is_best_effort_on_error(monkeypatch, ok_ollama, client):
+    """If resolving source rows raises (e.g. MariaDB unreachable), the search
+    still succeeds and returns results WITHOUT a ``source`` key — hydration is
+    strictly best-effort and never breaks the search."""
+    record = {}
+    fake = _make_fake_pymilvus(record, schema_description=_SOURCE_META)
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    def _boom(db, table, pk_column, pks, settings=None):
+        raise RuntimeError("mariadb unreachable")
+
+    monkeypatch.setattr(console, "read_rows_by_pks", _boom)
+
+    resp = client.post(
+        "/milvus/collections/movies_db_films/search",
+        json={"query": "prison drama", "top_k": 3},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert [r["pk"] for r in body["results"]] == [3, 1]
+    # results returned, but none carry a source (hydration failed silently)
+    assert all("source" not in r for r in body["results"])
+
+
+def test_search_without_metadata_skips_hydration(monkeypatch, ok_ollama, client):
+    """An older collection whose schema description is not JSON metadata simply
+    skips hydration: results have only {pk, text, score} and no ``source``."""
+    record = {}
+    # default schema_description is "" -> not JSON -> hydration skipped
+    fake = _make_fake_pymilvus(record)
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    def _should_not_be_called(*args, **kwargs):  # pragma: no cover
+        raise AssertionError("read_rows_by_pks must not run without metadata")
+
+    monkeypatch.setattr(console, "read_rows_by_pks", _should_not_be_called)
+
+    resp = client.post(
+        "/milvus/collections/shop_faqs/search",
+        json={"query": "hello", "top_k": 3},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert all(set(r) == {"pk", "text", "score"} for r in body["results"])
