@@ -29,12 +29,16 @@ interface IndexModalProps {
   database: string;
   table: string;
   onClose: () => void;
+  // Called after a successful index so the caller can refresh derived state
+  // (e.g. the set of existing Milvus collections).
+  onIndexed?: () => void;
 }
 
 export default function IndexModal({
   database,
   table,
   onClose,
+  onIndexed,
 }: IndexModalProps) {
   const [columns, setColumns] = useState<ColumnInfo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -78,6 +82,7 @@ export default function IndexModal({
           `Indexed ${res.indexed} rows (dim ${res.dim})` +
             (res.collection ? ` into ${res.collection}` : "")
         );
+        onIndexed?.();
       } else {
         toast.error(res.message ?? "Indexing failed");
       }

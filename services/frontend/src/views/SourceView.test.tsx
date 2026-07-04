@@ -38,6 +38,14 @@ describe("SourceView", () => {
         { name: "faqs", created: true, rows: 4 },
       ],
     });
+    // By default no Milvus collections exist, so no "Test" buttons render.
+    mockedApi.getCollections.mockResolvedValue({ collections: [] });
+    mockedApi.searchCollection.mockResolvedValue({
+      collection: "milvus_station_users",
+      query: "hi",
+      top_k: 5,
+      results: [],
+    });
   });
 
   it("renders the database list from the API", async () => {
@@ -129,5 +137,89 @@ describe("SourceView", () => {
       )
     );
     expect(await screen.findByText("zoe")).toBeInTheDocument();
+  });
+
+  it("renders a 'Test' button only for tables that have a matching Milvus collection", async () => {
+    // Two tables: "users" has a collection, "orders" does not.
+    mockedApi.getTables.mockResolvedValue({
+      database: "milvus_station",
+      tables: [
+        { name: "users", rows: 42 },
+        { name: "orders", rows: 7 },
+      ],
+    });
+    mockedApi.getCollections.mockResolvedValue({
+      collections: [{ name: "milvus_station_users", count: 42 }],
+    });
+
+    render(<SourceView />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^milvus_station$/ })
+    );
+
+    // Both table buttons render.
+    await screen.findByRole("button", { name: /users/ });
+    await screen.findByRole("button", { name: /orders/ });
+
+    // Exactly one "Test" button, and it belongs to the row that has a collection.
+    const testButtons = await screen.findAllByRole("button", {
+      name: /^test$/i,
+    });
+    expect(testButtons).toHaveLength(1);
+
+    const usersRow = screen
+      .getByRole("button", { name: /users/ })
+      .closest("li");
+    const ordersRow = screen
+      .getByRole("button", { name: /orders/ })
+      .closest("li");
+    expect(usersRow).not.toBeNull();
+    expect(ordersRow).not.toBeNull();
+    expect(usersRow).toContainElement(testButtons[0]);
+    expect(ordersRow?.textContent).not.toMatch(/test/i);
+  });
+
+  it("opens the search dialog for the correct collection when 'Test' is clicked", async () => {
+    mockedApi.getTables.mockResolvedValue({
+      database: "milvus_station",
+      tables: [{ name: "users", rows: 42 }],
+    });
+    mockedApi.getCollections.mockResolvedValue({
+      collections: [{ name: "milvus_station_users", count: 42 }],
+    });
+
+    render(<SourceView />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^milvus_station$/ })
+    );
+
+    const testButton = await screen.findByRole("button", { name: /^test$/i });
+    fireEvent.click(testButton);
+
+    // The SearchTestModal dialog opens targeting the collection name.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/search test on/i);
+    expect(dialog).toHaveTextContent("milvus_station_users");
+  });
+
+  it("does not crash and shows no 'Test' buttons when Milvus is unreachable", async () => {
+    mockedApi.getTables.mockResolvedValue({
+      database: "milvus_station",
+      tables: [{ name: "users", rows: 42 }],
+    });
+    mockedApi.getCollections.mockResolvedValue({
+      collections: [],
+      status: "unreachable",
+    });
+
+    render(<SourceView />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^milvus_station$/ })
+    );
+
+    await screen.findByRole("button", { name: /users/ });
+    expect(
+      screen.queryByRole("button", { name: /^test$/i })
+    ).not.toBeInTheDocument();
   });
 });

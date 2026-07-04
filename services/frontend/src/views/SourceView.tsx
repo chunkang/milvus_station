@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Database,
   DownloadCloud,
+  FlaskConical,
   Loader2,
   Sparkles,
   Table2,
@@ -14,12 +15,14 @@ import {
   getDatabases,
   getTables,
   getRows,
+  getCollections,
   importSamples,
   type TableInfo,
   type RowsResponse,
 } from "../api";
 import DataTable from "../components/DataTable";
 import IndexModal from "../components/IndexModal";
+import SearchTestModal from "../components/SearchTestModal";
 import {
   Card,
   CardContent,
@@ -38,6 +41,16 @@ const PAGE_SIZE = 25;
 
 // The application's own schema database. Sample tables can only be imported here.
 const APP_DATABASE = "milvus_station";
+
+// Replicate the backend's sanitize_collection_name(db, table): join db and
+// table with "_", replace every char not in [0-9a-zA-Z_] with "_", and prefix
+// "c_" if the result starts with a digit. Must match the backend exactly so we
+// can tell whether a table already has a Milvus collection.
+function collectionNameFor(db: string, table: string): string {
+  let safe = `${db}_${table}`.replace(/[^0-9a-zA-Z_]/g, "_");
+  if (/^[0-9]/.test(safe)) safe = `c_${safe}`;
+  return safe;
+}
 
 function ErrorAlert({ message }: { message: string }) {
   return (
@@ -83,6 +96,13 @@ export default function SourceView() {
     table: string;
   } | null>(null);
 
+  // Existing Milvus collection names. Used to decide whether a table already
+  // has a collection and should therefore show a "Test" button.
+  const [collections, setCollections] = useState<Set<string>>(new Set());
+
+  // Search-test modal target (a Milvus collection name).
+  const [testCollection, setTestCollection] = useState<string | null>(null);
+
   // Sample import
   const [importing, setImporting] = useState(false);
 
@@ -101,9 +121,27 @@ export default function SourceView() {
     };
   }, []);
 
+  // Fetch the set of existing Milvus collection names. Failures (including an
+  // "unreachable" Milvus) are swallowed into an empty set so the Source view
+  // never crashes just because Milvus is down.
+  function refreshCollections() {
+    return getCollections()
+      .then((res) => {
+        if (res.status === "unreachable" || !Array.isArray(res.collections)) {
+          setCollections(new Set());
+          return;
+        }
+        setCollections(new Set(res.collections.map((c) => c.name)));
+      })
+      .catch(() => setCollections(new Set()));
+  }
+
   function refreshTables(db: string) {
     setTablesError(null);
     setTablesLoading(true);
+    // Refresh collections alongside tables so each row can decide whether to
+    // show a "Test" button.
+    void refreshCollections();
     return getTables(db)
       .then((res) => {
         setTables(res.tables);
@@ -262,40 +300,58 @@ export default function SourceView() {
             {activeDb && tables && tables.length > 0 && (
               <ScrollArea className="max-h-80">
                 <ul className="flex flex-col gap-1 pr-2">
-                  {tables.map((t) => (
-                    <li
-                      key={t.name}
-                      className={cn(
-                        "flex items-center justify-between gap-2 rounded-md border border-transparent px-1 py-0.5",
-                        activeTable === t.name && "border-border bg-muted/50"
-                      )}
-                    >
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="flex-1 justify-start"
-                        onClick={() => selectTable(t.name)}
+                  {tables.map((t) => {
+                    const collectionName = collectionNameFor(activeDb, t.name);
+                    const hasCollection = collections.has(collectionName);
+                    return (
+                      <li
+                        key={t.name}
+                        className={cn(
+                          "flex items-center justify-between gap-2 rounded-md border border-transparent px-1 py-0.5",
+                          activeTable === t.name && "border-border bg-muted/50"
+                        )}
                       >
-                        <Table2 className="size-4 text-muted-foreground" />
-                        <span>{t.name}</span>
-                        <Badge variant="secondary" className="ml-auto">
-                          {t.rows}
-                        </Badge>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() =>
-                          setIndexTarget({ database: activeDb, table: t.name })
-                        }
-                      >
-                        <Sparkles className="size-3.5" />
-                        Index to Milvus
-                      </Button>
-                    </li>
-                  ))}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="flex-1 justify-start"
+                          onClick={() => selectTable(t.name)}
+                        >
+                          <Table2 className="size-4 text-muted-foreground" />
+                          <span>{t.name}</span>
+                          <Badge variant="secondary" className="ml-auto">
+                            {t.rows}
+                          </Badge>
+                        </Button>
+                        {hasCollection && (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => setTestCollection(collectionName)}
+                          >
+                            <FlaskConical className="size-3.5" />
+                            Test
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setIndexTarget({
+                              database: activeDb,
+                              table: t.name,
+                            })
+                          }
+                        >
+                          <Sparkles className="size-3.5" />
+                          Index to Milvus
+                        </Button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </ScrollArea>
             )}
@@ -340,6 +396,18 @@ export default function SourceView() {
           database={indexTarget.database}
           table={indexTarget.table}
           onClose={() => setIndexTarget(null)}
+          onIndexed={() => {
+            // A new collection may now exist; refresh so its Test button shows.
+            void refreshCollections();
+          }}
+        />
+      )}
+
+      {testCollection && (
+        <SearchTestModal
+          collection={testCollection}
+          open
+          onOpenChange={(open) => !open && setTestCollection(null)}
         />
       )}
     </section>
