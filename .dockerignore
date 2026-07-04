@@ -1,0 +1,15 @@
+# Root build-context ignores (applies to the nginx image built from `.`).
+.git
+.github
+.moai
+.claude
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/*.log
+.env
+.env.*
+!.env.example
+.DS_Store

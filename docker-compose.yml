@@ -1,0 +1,218 @@
+# docker-compose.yml
+# SPEC-INFRA-001: Dockerized Milvus Station - infrastructure scaffolding + hello-world.
+#
+# Single-file orchestration of the 8-container topology:
+#   nginx (ingress) | fastapi | mariadb | phpmyadmin | milvus | etcd | minio | ollama
+#
+# Only nginx publishes a host port (${INGRESS_PORT:-38005}); every other service is
+# reachable exclusively on the internal bridge network by service name (N2).
+# Secrets are supplied via a git-ignored .env file (templated by .env.example, N1).
+
+name: milvus-station
+
+networks:
+  milvus_net:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  etcd_data:
+  minio_data:
+  milvus_data:
+  ollama_data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # Relational metadata store. No host port (reached via phpMyAdmin / backend).
+  # ---------------------------------------------------------------------------
+  mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-change-me-root}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-milvus_station}
+      MARIADB_USER: ${MARIADB_USER:-milvus}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-milvus}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - milvus_net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # DB admin UI. Served to the browser through nginx at /mysql (no host port).
+  # ---------------------------------------------------------------------------
+  phpmyadmin:
+    image: phpmyadmin:5.2
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mariadb
+      PMA_ABSOLUTE_URI: ${PMA_ABSOLUTE_URI:-http://localhost:38005/mysql/}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    networks:
+      - milvus_net
+
+  # ---------------------------------------------------------------------------
+  # Milvus metadata store (etcd). Internal only.
+  # ---------------------------------------------------------------------------
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.16
+    restart: unless-stopped
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+    volumes:
+      - etcd_data:/etcd
+    networks:
+      - milvus_net
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Milvus object storage (MinIO). Internal only.
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    command: server /minio_data --console-address ":9001"
+    volumes:
+      - minio_data:/minio_data
+    networks:
+      - milvus_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Milvus standalone vector store. Starts only once etcd + minio are healthy.
+  # Internal only for this milestone (19530 gRPC / 9091 health are not published).
+  # ---------------------------------------------------------------------------
+  milvus:
+    image: milvusdb/milvus:v2.5.4
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    volumes:
+      - milvus_data:/var/lib/milvus
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - milvus_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Ollama embedding runtime (CPU). Model is pulled at runtime into a volume.
+  # The image ships no curl, so health is checked via the ollama CLI.
+  # ---------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:0.5.4
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - milvus_net
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # FastAPI health & status backend. Reached through nginx at /api (no host port).
+  # Starts only after mariadb + milvus + ollama report healthy.
+  # ---------------------------------------------------------------------------
+  fastapi:
+    build:
+      context: ./services/backend
+    restart: unless-stopped
+    environment:
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: "3306"
+      MARIADB_USER: ${MARIADB_USER:-milvus}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-milvus}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-milvus_station}
+      MILVUS_HOST: milvus
+      MILVUS_PORT: "19530"
+      OLLAMA_BASE_URL: http://ollama:11434
+      ETCD_ENDPOINT: etcd:2379
+      MINIO_ENDPOINT: minio:9000
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      milvus:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - milvus_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # nginx INGRESS - the ONLY service publishing a host port.
+  # Serves the React static build at /, proxies /mysql -> phpMyAdmin and
+  # /api -> fastapi. Does not wait for backend health so the hello-world page
+  # renders even while the backend is warming or down (N4).
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${INGRESS_PORT:-38005}:80"
+    depends_on:
+      fastapi:
+        condition: service_started
+      phpmyadmin:
+        condition: service_started
+    networks:
+      - milvus_net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
