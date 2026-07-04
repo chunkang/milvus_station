@@ -57,6 +57,17 @@ EMBEDDABLE_TYPES: frozenset[str] = frozenset(
     }
 )
 
+# Numeric column types, split by the scalar kind used when they are stored as
+# typed Milvus fields for range filtering. Integer-like types map to
+# ``DataType.INT64``; fractional types map to ``DataType.DOUBLE``. Compared
+# case-insensitively against ``information_schema.COLUMNS.DATA_TYPE``.
+NUMERIC_INT_TYPES: frozenset[str] = frozenset(
+    {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year", "bit"}
+)
+NUMERIC_FLOAT_TYPES: frozenset[str] = frozenset(
+    {"decimal", "numeric", "float", "double", "real"}
+)
+
 DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 
@@ -203,6 +214,36 @@ def list_columns(
         }
         for row in rows
     ]
+
+
+def column_types(
+    db: str, table: str, settings: Settings | None = None
+) -> dict[str, str]:
+    """Return ``{column_name: data_type_lowercase}`` for a table.
+
+    Reuses :func:`_column_rows` (information_schema). The caller is expected to
+    have validated ``db``/``table`` already (``build_index`` does). This is a
+    thin introspection helper used to decide which selected columns are numeric
+    (stored as typed Milvus scalar fields) versus text (embedded).
+    """
+    rows = _column_rows(db, table, settings)
+    return {
+        row["COLUMN_NAME"]: str(row["DATA_TYPE"]).lower() for row in rows
+    }
+
+
+def numeric_kind(data_type: str) -> str | None:
+    """Classify a column ``data_type`` as ``"int"``, ``"float"`` or ``None``.
+
+    ``None`` means the type is not numeric (text/temporal) and should be
+    embedded as text rather than stored as a filterable scalar field.
+    """
+    dt = str(data_type or "").lower()
+    if dt in NUMERIC_INT_TYPES:
+        return "int"
+    if dt in NUMERIC_FLOAT_TYPES:
+        return "float"
+    return None
 
 
 def validate_column(

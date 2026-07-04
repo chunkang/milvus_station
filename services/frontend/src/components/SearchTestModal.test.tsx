@@ -16,6 +16,11 @@ const mockedApi = vi.mocked(api);
 describe("SearchTestModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no numeric fields, so the base dialog behaves as before.
+    mockedApi.getFilterFields.mockResolvedValue({
+      collection: "docs",
+      fields: [],
+    });
   });
 
   it("runs a search and renders ranked results", async () => {
@@ -39,7 +44,12 @@ describe("SearchTestModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /run test/i }));
 
     await waitFor(() =>
-      expect(mockedApi.searchCollection).toHaveBeenCalledWith("docs", "hello", 5)
+      expect(mockedApi.searchCollection).toHaveBeenCalledWith(
+        "docs",
+        "hello",
+        5,
+        undefined
+      )
     );
 
     expect(await screen.findByText("best match")).toBeInTheDocument();
@@ -89,5 +99,171 @@ describe("SearchTestModal", () => {
     fireEvent.click(screen.getByRole("button", { name: /run test/i }));
 
     expect(await screen.findByText(/no matches/i)).toBeInTheDocument();
+  });
+
+  it("does not show the Filters section when there are no numeric fields", async () => {
+    mockedApi.searchCollection.mockResolvedValue({
+      collection: "docs",
+      query: "hello",
+      top_k: 5,
+      results: [],
+    });
+
+    render(
+      <SearchTestModal collection="docs" open onOpenChange={() => {}} />
+    );
+
+    // Wait for the filter-fields fetch to settle.
+    await waitFor(() =>
+      expect(mockedApi.getFilterFields).toHaveBeenCalledWith("docs")
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /add filter/i })
+    ).not.toBeInTheDocument();
+
+    // Search still works, called without filters (undefined).
+    fireEvent.change(screen.getByLabelText(/query text/i), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() =>
+      expect(mockedApi.searchCollection).toHaveBeenCalledWith(
+        "docs",
+        "hello",
+        5,
+        undefined
+      )
+    );
+  });
+
+  it("adds a numeric filter row and passes it to the search", async () => {
+    mockedApi.getFilterFields.mockResolvedValue({
+      collection: "movies",
+      fields: [
+        { name: "year", type: "int" },
+        { name: "rating", type: "float" },
+      ],
+    });
+    mockedApi.searchCollection.mockResolvedValue({
+      collection: "movies",
+      query: "space epic",
+      top_k: 5,
+      results: [],
+    });
+
+    render(
+      <SearchTestModal collection="movies" open onOpenChange={() => {}} />
+    );
+
+    // The Filters section appears once the numeric fields load.
+    const addButton = await screen.findByRole("button", {
+      name: /add filter/i,
+    });
+    fireEvent.click(addButton);
+
+    // Field defaults to the first numeric field ("year"); keep it.
+    // Operator defaults to ">=" (gte); keep it.
+    // Set the value.
+    fireEvent.change(screen.getByLabelText(/filter value/i), {
+      target: { value: "2000" },
+    });
+
+    fireEvent.change(screen.getByLabelText(/query text/i), {
+      target: { value: "space epic" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() =>
+      expect(mockedApi.searchCollection).toHaveBeenCalledWith(
+        "movies",
+        "space epic",
+        5,
+        [{ field: "year", op: "gte", value: 2000 }]
+      )
+    );
+  });
+
+  it("lets the user change field and operator via the selects", async () => {
+    mockedApi.getFilterFields.mockResolvedValue({
+      collection: "movies",
+      fields: [
+        { name: "year", type: "int" },
+        { name: "rating", type: "float" },
+      ],
+    });
+    mockedApi.searchCollection.mockResolvedValue({
+      collection: "movies",
+      query: "great",
+      top_k: 5,
+      results: [],
+    });
+
+    render(
+      <SearchTestModal collection="movies" open onOpenChange={() => {}} />
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /add filter/i }));
+
+    // Change field to "rating".
+    fireEvent.click(screen.getByRole("combobox", { name: /filter field/i }));
+    fireEvent.click(await screen.findByRole("option", { name: "rating" }));
+
+    // Change operator to ">".
+    fireEvent.click(screen.getByRole("combobox", { name: /filter operator/i }));
+    fireEvent.click(await screen.findByRole("option", { name: ">" }));
+
+    fireEvent.change(screen.getByLabelText(/filter value/i), {
+      target: { value: "4" },
+    });
+
+    fireEvent.change(screen.getByLabelText(/query text/i), {
+      target: { value: "great" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() =>
+      expect(mockedApi.searchCollection).toHaveBeenCalledWith(
+        "movies",
+        "great",
+        5,
+        [{ field: "rating", op: "gt", value: 4 }]
+      )
+    );
+  });
+
+  it("ignores filter rows with an empty value", async () => {
+    mockedApi.getFilterFields.mockResolvedValue({
+      collection: "movies",
+      fields: [{ name: "year", type: "int" }],
+    });
+    mockedApi.searchCollection.mockResolvedValue({
+      collection: "movies",
+      query: "hello",
+      top_k: 5,
+      results: [],
+    });
+
+    render(
+      <SearchTestModal collection="movies" open onOpenChange={() => {}} />
+    );
+
+    // Add a row but leave its value empty.
+    fireEvent.click(await screen.findByRole("button", { name: /add filter/i }));
+
+    fireEvent.change(screen.getByLabelText(/query text/i), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /run test/i }));
+
+    await waitFor(() =>
+      expect(mockedApi.searchCollection).toHaveBeenCalledWith(
+        "movies",
+        "hello",
+        5,
+        undefined
+      )
+    );
   });
 });

@@ -107,6 +107,23 @@ export interface SearchResponse {
   message?: string;
 }
 
+export interface FilterField {
+  name: string;
+  type: "int" | "float";
+}
+
+export interface FilterFieldsResponse {
+  collection: string;
+  fields: FilterField[];
+  status?: string;
+}
+
+export interface SearchFilter {
+  field: string;
+  op: string;
+  value: number;
+}
+
 // ---------- Core request helper ----------
 
 /**
@@ -216,17 +233,28 @@ export function getCollectionData(
   );
 }
 
+export function getFilterFields(name: string): Promise<FilterFieldsResponse> {
+  return request<FilterFieldsResponse>(
+    `/api/milvus/collections/${enc(name)}/fields`
+  );
+}
+
 export function searchCollection(
   name: string,
   query: string,
-  topK = 5
+  topK = 5,
+  filters?: SearchFilter[]
 ): Promise<SearchResponse> {
   return request<SearchResponse>(
     `/api/milvus/collections/${enc(name)}/search`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, top_k: topK }),
+      body: JSON.stringify({
+        query,
+        top_k: topK,
+        ...(filters && filters.length ? { filters } : {}),
+      }),
     }
   );
 }

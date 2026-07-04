@@ -71,11 +71,26 @@ class IndexRequest(BaseModel):
     id_column: str | None = None
 
 
+class FilterSpec(BaseModel):
+    """A single numeric range constraint for a search.
+
+    ``field`` names a numeric scalar field on the collection, ``op`` is one of
+    ``lt``/``lte``/``eq``/``gte``/``gt``/``ne`` and ``value`` the comparison
+    value. Validation (field must exist and be numeric, op must be allowed) is
+    performed in :func:`app.vectors.search_collection`.
+    """
+
+    field: str
+    op: str
+    value: float
+
+
 class SearchRequest(BaseModel):
     """Request body for POST /milvus/collections/{name}/search."""
 
     query: str
     top_k: int = 5
+    filters: list[FilterSpec] | None = None
 
 
 @router.get("/databases")
@@ -144,6 +159,12 @@ def get_milvus_collection_rows(
     return vectors.query_collection(name, page=page, page_size=page_size)
 
 
+@router.get("/milvus/collections/{name}/fields")
+def get_milvus_collection_fields(name: str) -> dict[str, object]:
+    """List a collection's numeric scalar fields available for filtering."""
+    return vectors.list_filter_fields(name)
+
+
 @router.post("/milvus/collections/{name}/search")
 def post_milvus_search(name: str, body: SearchRequest) -> dict[str, object]:
     """Semantic search over a Milvus collection.
@@ -155,7 +176,12 @@ def post_milvus_search(name: str, body: SearchRequest) -> dict[str, object]:
     """
     if not body.query or not body.query.strip():
         raise HTTPException(status_code=400, detail="query is required")
-    return vectors.search_collection(name, body.query, body.top_k)
+    filters = (
+        [f.model_dump() for f in body.filters] if body.filters else None
+    )
+    return vectors.search_collection(
+        name, body.query, body.top_k, filters=filters
+    )
 
 
 @router.post("/databases/{db}/samples/import")

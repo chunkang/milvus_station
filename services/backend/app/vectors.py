@@ -85,6 +85,19 @@ def sanitize_collection_name(db: str, table: str) -> str:
     return safe
 
 
+def sanitize_field_name(name: str) -> str:
+    """Build a Milvus-safe scalar field name from a column name.
+
+    Milvus field names must be ``[0-9a-zA-Z_]`` and may not start with a digit.
+    Used to derive the stored numeric field name from a source column so range
+    filters (e.g. ``year >= 2000``) can reference it.
+    """
+    safe = re.sub(r"[^0-9a-zA-Z_]", "_", name)
+    if safe and safe[0].isdigit():
+        safe = f"f_{safe}"
+    return safe
+
+
 def embed_text(text: str, settings: Settings | None = None) -> list[float]:
     """Return the embedding vector for ``text`` via Ollama.
 
@@ -202,8 +215,35 @@ def build_index(
             "indexed": 0,
             "dim": 0,
             "columns": columns,
+            "text_columns": [],
+            "numeric_fields": [],
             "message": "at least one column is required",
         }
+
+    # Split the selected columns by type. TEXT (and temporal) columns form the
+    # embedded text; NUMERIC columns are stored as typed Milvus scalar fields so
+    # search can filter on their magnitude (e.g. ``year >= 2000``). Type lookup
+    # uses information_schema; unknown/omitted types default to text.
+    col_types = console.column_types(database, table, settings)
+    text_cols: list[str] = []
+    num_cols: list[dict[str, str]] = []
+    for col in columns:
+        kind = console.numeric_kind(col_types.get(col, ""))
+        if kind is None:
+            text_cols.append(col)
+        else:
+            num_cols.append(
+                {"orig": col, "name": sanitize_field_name(col), "kind": kind}
+            )
+
+    # Embedding text is built from the TEXT columns. If none were selected (all
+    # numeric), fall back to combining every selected column so a vector still
+    # exists to search against.
+    embed_cols = text_cols if text_cols else columns
+
+    numeric_summary = [
+        {"name": nf["name"], "type": nf["kind"]} for nf in num_cols
+    ]
 
     try:
         rows = console.read_pk_columns(
@@ -213,10 +253,11 @@ def build_index(
         pks: list[int] = []
         vectors: list[list[float]] = []
         texts: list[str] = []
+        num_values: dict[str, list[Any]] = {nf["orig"]: [] for nf in num_cols}
         dim: int | None = None
 
         for row in rows:
-            text = _combine_row_text(row, columns)
+            text = _combine_row_text(row, embed_cols)
             if text.strip() == "":
                 continue
             embedding = embed_text(text, settings)
@@ -225,6 +266,15 @@ def build_index(
             pks.append(int(row["pk"]))
             vectors.append(embedding)
             texts.append(text[:TEXT_MAX_LENGTH])
+            for nf in num_cols:
+                raw = row.get(nf["orig"])
+                if raw is None:
+                    value: Any = 0
+                elif nf["kind"] == "int":
+                    value = int(raw)
+                else:
+                    value = float(raw)
+                num_values[nf["orig"]].append(value)
 
         if dim is None:
             return {
@@ -233,10 +283,22 @@ def build_index(
                 "indexed": 0,
                 "dim": 0,
                 "columns": columns,
+                "text_columns": text_cols,
+                "numeric_fields": numeric_summary,
                 "message": "no non-empty text rows to index",
             }
 
-        _create_and_insert(collection, dim, pks, vectors, texts, settings)
+        numeric_fields = [
+            {
+                "name": nf["name"],
+                "kind": nf["kind"],
+                "values": num_values[nf["orig"]],
+            }
+            for nf in num_cols
+        ]
+        _create_and_insert(
+            collection, dim, pks, vectors, texts, numeric_fields, settings
+        )
 
         return {
             "status": "ok",
@@ -244,6 +306,8 @@ def build_index(
             "indexed": len(pks),
             "dim": dim,
             "columns": columns,
+            "text_columns": text_cols,
+            "numeric_fields": numeric_summary,
             "message": (
                 f"indexed {len(pks)} rows into {collection} "
                 f"from columns: {', '.join(columns)}"
@@ -257,6 +321,8 @@ def build_index(
             "indexed": 0,
             "dim": 0,
             "columns": columns,
+            "text_columns": text_cols,
+            "numeric_fields": [],
             "message": str(exc),
         }
     except Exception as exc:  # Milvus unreachable or any other failure
@@ -266,6 +332,8 @@ def build_index(
             "indexed": 0,
             "dim": 0,
             "columns": columns,
+            "text_columns": text_cols,
+            "numeric_fields": [],
             "message": f"{type(exc).__name__}: {exc}",
         }
 
@@ -276,9 +344,15 @@ def _create_and_insert(
     pks: list[int],
     vectors: list[list[float]],
     texts: list[str],
+    numeric_fields: list[dict[str, Any]],
     settings: Settings,
 ) -> None:
     """Create/recreate a Milvus collection and insert the vectors.
+
+    ``numeric_fields`` is an ordered list of
+    ``{"name": <sanitized>, "kind": "int"|"float", "values": [...]}`` describing
+    the typed scalar fields to store alongside the embedding so search can
+    filter on them. Each ``values`` list is aligned with ``pks``/``vectors``.
 
     ``pymilvus`` is imported lazily so tests can supply a fake module.
     """
@@ -309,6 +383,9 @@ def _create_and_insert(
             name="text", dtype=DataType.VARCHAR, max_length=TEXT_MAX_LENGTH + 1
         ),
     ]
+    for nf in numeric_fields:
+        dtype = DataType.INT64 if nf["kind"] == "int" else DataType.DOUBLE
+        fields.append(FieldSchema(name=nf["name"], dtype=dtype))
     schema = CollectionSchema(fields, description=f"embeddings for {collection}")
     coll = Collection(name=collection, schema=schema)
 
@@ -317,7 +394,13 @@ def _create_and_insert(
     # freshly inserted vectors unqueryable for a moment, so a browse immediately
     # after /index can read as empty. Doing it in this order guarantees the
     # collection is fully queryable by the time /index returns.
-    coll.insert([pks, vectors, texts])
+    #
+    # Insert column order must mirror the schema field order:
+    #   pks, vectors, texts, <numeric field 1 values>, <field 2 values>, ...
+    data: list[Any] = [pks, vectors, texts]
+    for nf in numeric_fields:
+        data.append(nf["values"])
+    coll.insert(data)
     coll.flush()
     coll.create_index(
         field_name="embedding",
@@ -372,6 +455,74 @@ def _format_cell(value: Any) -> Any:
     return console.jsonify(value)
 
 
+# Reserved (non-filterable) field names common to every collection.
+_RESERVED_FIELDS = frozenset({"pk", "embedding", "text"})
+
+# Public filter operators mapped to their Milvus boolean-expression symbols.
+FILTER_OPS: dict[str, str] = {
+    "lt": "<",
+    "lte": "<=",
+    "eq": "==",
+    "gte": ">=",
+    "gt": ">",
+    "ne": "!=",
+}
+
+
+def _numeric_schema_fields(coll: Any) -> dict[str, str]:
+    """Map a collection's numeric scalar fields to ``"int"`` / ``"float"``.
+
+    Reads ``coll.schema.fields`` and returns ``{field_name: kind}`` for the
+    typed scalar fields (INT64 -> ``"int"``, DOUBLE -> ``"float"``), excluding
+    the reserved ``pk`` / ``embedding`` / ``text`` fields. ``pymilvus`` is
+    imported lazily so tests can supply a fake ``DataType``.
+    """
+    from pymilvus import DataType  # lazy import
+
+    result: dict[str, str] = {}
+    for field in getattr(coll.schema, "fields", []):
+        if field.name in _RESERVED_FIELDS:
+            continue
+        if field.dtype == DataType.INT64:
+            result[field.name] = "int"
+        elif field.dtype == DataType.DOUBLE:
+            result[field.name] = "float"
+    return result
+
+
+def list_filter_fields(
+    name: str, settings: Settings | None = None
+) -> dict[str, Any]:
+    """List a collection's numeric scalar fields available for range filtering.
+
+    Returns ``{"collection": name, "fields": [{"name", "type"}]}`` where
+    ``type`` is ``"int"`` (INT64) or ``"float"`` (DOUBLE). The reserved
+    ``pk`` / ``embedding`` / ``text`` fields are excluded. If Milvus is
+    unreachable or the collection is missing, returns
+    ``{"collection": name, "fields": [], "status": "unreachable"}``.
+    """
+    settings = settings or get_settings()
+    try:
+        from pymilvus import Collection, connections, utility  # lazy import
+
+        connections.connect(
+            alias="default",
+            host=settings.milvus_host,
+            port=str(settings.milvus_port),
+        )
+        if not utility.has_collection(name):
+            return {"collection": name, "fields": [], "status": "unreachable"}
+
+        coll = Collection(name)
+        fields = [
+            {"name": fname, "type": kind}
+            for fname, kind in _numeric_schema_fields(coll).items()
+        ]
+        return {"collection": name, "fields": fields}
+    except Exception:
+        return {"collection": name, "fields": [], "status": "unreachable"}
+
+
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 50
 
@@ -391,6 +542,7 @@ def search_collection(
     name: str,
     query: str,
     top_k: int = DEFAULT_TOP_K,
+    filters: list[dict[str, Any]] | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Semantic search over a Milvus collection for a natural-language query.
@@ -399,11 +551,19 @@ def search_collection(
     resulting vector is searched against the collection's ``embedding``
     field using COSINE similarity. Results are returned best-first.
 
+    ``filters`` is an optional list of ``{"field", "op", "value"}`` numeric
+    range constraints. Each ``field`` must be one of the collection's numeric
+    scalar fields (INT64/DOUBLE) and each ``op`` one of
+    :data:`FILTER_OPS` (``lt``/``lte``/``eq``/``gte``/``gt``/``ne``); the value
+    is coerced to the field's kind (int/float). The filters are combined with
+    ``and`` into a Milvus boolean expression applied to the search.
+
     Like the rest of this module, every failure is converted into a
     structured ``{"status": "error", ...}`` payload so the route always
     answers HTTP 200 rather than 500:
 
     * empty / whitespace-only query -> ``"query is required"``
+    * unknown filter field / operator -> a clear message
     * model-not-pulled / Ollama unreachable -> the :class:`EmbeddingError`
       message forwarded verbatim (same friendly text as ``build_index``)
     * Milvus unreachable / missing collection -> a clear message
@@ -440,6 +600,40 @@ def search_collection(
             }
 
         coll = Collection(name)
+
+        # Build the optional filter expression from the collection's own numeric
+        # scalar fields. Every field/op is validated against an allow-list; the
+        # value is coerced to the field's kind so the expression is well-typed
+        # (e.g. ``year >= 2000`` rather than ``year >= 2000.0``).
+        expr: str | None = None
+        if filters:
+            numeric_fields = _numeric_schema_fields(coll)
+            parts: list[str] = []
+            for spec in filters:
+                field = spec.get("field")
+                op = spec.get("op")
+                value = spec.get("value")
+                if field not in numeric_fields:
+                    return {
+                        **base,
+                        "results": [],
+                        "status": "error",
+                        "message": f"unknown filter field: {field}",
+                    }
+                if op not in FILTER_OPS:
+                    return {
+                        **base,
+                        "results": [],
+                        "status": "error",
+                        "message": f"unknown filter op: {op}",
+                    }
+                if numeric_fields[field] == "int":
+                    coerced: Any = int(value)
+                else:
+                    coerced = float(value)
+                parts.append(f"{field} {FILTER_OPS[op]} {coerced}")
+            expr = " and ".join(parts)
+
         coll.load()
 
         search_result = coll.search(
@@ -447,6 +641,7 @@ def search_collection(
             anns_field="embedding",
             param={"metric_type": "COSINE", "params": {"nprobe": 10}},
             limit=top_k,
+            expr=expr,
             output_fields=["pk", "text"],
         )
 
@@ -465,7 +660,10 @@ def search_collection(
                 {"pk": int(pk), "text": text, "score": float(score)}
             )
 
-        return {**base, "results": results, "status": "ok"}
+        out = {**base, "results": results, "status": "ok"}
+        if filters:
+            out["filters"] = filters
+        return out
     except Exception as exc:  # Milvus unreachable or any other failure
         return {
             **base,

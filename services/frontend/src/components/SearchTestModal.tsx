@@ -5,12 +5,19 @@
 // └──────────────────────────────────────────────────────────────────────────┘
 
 // Modal dialog for running a semantic-search test against a Milvus collection.
-// Takes a query (+ optional top_k), POSTs to /api/milvus/collections/{name}/search,
-// and renders the ranked results (toast + inline alert on error).
-import { useState } from "react";
-import { Loader2, Search, TriangleAlert } from "lucide-react";
+// Takes a query (+ optional top_k) plus optional numeric range filters, POSTs to
+// /api/milvus/collections/{name}/search, and renders the ranked results
+// (toast + inline alert on error).
+import { useEffect, useState } from "react";
+import { Loader2, Plus, Search, TriangleAlert, X } from "lucide-react";
 import { toast } from "sonner";
-import { searchCollection, type SearchResponse } from "../api";
+import {
+  getFilterFields,
+  searchCollection,
+  type FilterField,
+  type SearchFilter,
+  type SearchResponse,
+} from "../api";
 import {
   Dialog,
   DialogContent,
@@ -24,11 +31,40 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface SearchTestModalProps {
   collection: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+// Operator options shown to the user, mapped to the op values the backend expects.
+const OPERATORS: { value: string; label: string }[] = [
+  { value: "lt", label: "<" },
+  { value: "lte", label: "<=" },
+  { value: "eq", label: "=" },
+  { value: "gte", label: ">=" },
+  { value: "gt", label: ">" },
+  { value: "ne", label: "!=" },
+];
+
+// A single filter row in the UI. `value` is kept as a raw string while editing
+// and coerced to a number only when the search is submitted.
+interface FilterRow {
+  field: string;
+  op: string;
+  value: string;
+}
+
+function newRow(field: string): FilterRow {
+  return { field, op: "gte", value: "" };
 }
 
 export default function SearchTestModal({
@@ -41,6 +77,57 @@ export default function SearchTestModal({
   const [running, setRunning] = useState(false);
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fields, setFields] = useState<FilterField[]>([]);
+  const [rows, setRows] = useState<FilterRow[]>([]);
+
+  // Load the numeric fields available for filtering whenever the dialog opens.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setRows([]);
+    // Wrapped in Promise.resolve so a missing/empty response never throws.
+    Promise.resolve(getFilterFields(collection))
+      .then((res) => {
+        if (cancelled) return;
+        // Missing body, status:"unreachable", or an empty list => no filters.
+        if (!res || res.status === "unreachable") {
+          setFields([]);
+          return;
+        }
+        setFields(res.fields ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setFields([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [collection, open]);
+
+  function addRow() {
+    if (fields.length === 0) return;
+    setRows((prev) => [...prev, newRow(fields[0].name)]);
+  }
+
+  function removeRow(index: number) {
+    setRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateRow(index: number, patch: Partial<FilterRow>) {
+    setRows((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, ...patch } : row))
+    );
+  }
+
+  function collectFilters(): SearchFilter[] {
+    return rows
+      .filter((row) => row.value.trim() !== "" && row.field)
+      .map((row) => ({
+        field: row.field,
+        op: row.op,
+        value: Number(row.value),
+      }));
+  }
 
   async function runTest() {
     const trimmed = query.trim();
@@ -49,7 +136,13 @@ export default function SearchTestModal({
     setError(null);
     setResponse(null);
     try {
-      const res = await searchCollection(collection, trimmed, topK);
+      const filters = collectFilters();
+      const res = await searchCollection(
+        collection,
+        trimmed,
+        topK,
+        filters.length ? filters : undefined
+      );
       if (res.status === "error") {
         const message = res.message ?? "Search failed";
         setError(message);
@@ -108,6 +201,92 @@ export default function SearchTestModal({
               className="w-24"
             />
           </div>
+
+          {fields.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <Label>Filters</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addRow}
+                >
+                  <Plus className="size-4" />
+                  Add filter
+                </Button>
+              </div>
+
+              {rows.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Optionally narrow results by numeric field.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {rows.map((row, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <Select
+                        value={row.field}
+                        onValueChange={(value) => updateRow(i, { field: value })}
+                      >
+                        <SelectTrigger
+                          aria-label="Filter field"
+                          className="w-32"
+                        >
+                          <SelectValue placeholder="Field" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {fields.map((f) => (
+                            <SelectItem key={f.name} value={f.name}>
+                              {f.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      <Select
+                        value={row.op}
+                        onValueChange={(value) => updateRow(i, { op: value })}
+                      >
+                        <SelectTrigger
+                          aria-label="Filter operator"
+                          className="w-20"
+                        >
+                          <SelectValue placeholder="Op" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {OPERATORS.map((op) => (
+                            <SelectItem key={op.value} value={op.value}>
+                              {op.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      <Input
+                        type="number"
+                        aria-label="Filter value"
+                        value={row.value}
+                        onChange={(e) => updateRow(i, { value: e.target.value })}
+                        placeholder="value"
+                        className="flex-1"
+                      />
+
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Remove filter"
+                        onClick={() => removeRow(i)}
+                      >
+                        <X className="size-4" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           {error && (
             <Alert variant="destructive">

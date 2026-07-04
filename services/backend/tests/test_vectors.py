@@ -76,11 +76,20 @@ class _FakeHit:
         self.entity = _FakeEntity({"pk": pk, "text": text})
 
 
-def _make_fake_pymilvus(record, connect_error=False):
+def _make_fake_pymilvus(record, connect_error=False, extra_fields=None):
+    """Build a fake ``pymilvus`` module.
+
+    ``extra_fields`` optionally augments the DEFAULT collection schema with
+    numeric scalar fields — a list of ``(name, dtype)`` tuples (dtype being one
+    of the ``DataType`` string constants, e.g. ``"INT64"`` / ``"DOUBLE"``) — so
+    tests that open ``Collection(name)`` (search / list_filter_fields) see
+    filterable fields without first running ``build_index``.
+    """
     mod = types.ModuleType("pymilvus")
 
     class DataType:
         INT64 = "INT64"
+        DOUBLE = "DOUBLE"
         FLOAT_VECTOR = "FLOAT_VECTOR"
         VARCHAR = "VARCHAR"
 
@@ -104,11 +113,21 @@ def _make_fake_pymilvus(record, connect_error=False):
         FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=3),
         FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=100),
     ]
+    for _fname, _fdtype in (extra_fields or []):
+        _DEFAULT_FIELDS.append(FieldSchema(name=_fname, dtype=_fdtype))
 
     class Collection:
         def __init__(self, name, schema=None):
             self.name = name
-            self.schema = schema if schema is not None else _Schema(_DEFAULT_FIELDS)
+            if schema is not None:
+                self.schema = schema
+                # Expose the created schema's fields so build_index tests can
+                # assert numeric scalar fields were declared.
+                record["schema_fields"] = [
+                    (f.name, f.dtype) for f in schema.fields
+                ]
+            else:
+                self.schema = _Schema(list(_DEFAULT_FIELDS))
 
         def create_index(self, field_name, index_params):
             record["index_params"] = index_params
@@ -138,13 +157,14 @@ def _make_fake_pymilvus(record, connect_error=False):
             return [{"pk": 1, "embedding": [0.1] * 768, "text": "hello"}]
 
         def search(
-            self, data, anns_field, param, limit, output_fields=None
+            self, data, anns_field, param, limit, expr=None, output_fields=None
         ):
             record["search"] = {
                 "data": data,
                 "anns_field": anns_field,
                 "param": param,
                 "limit": limit,
+                "expr": expr,
                 "output_fields": output_fields,
             }
             # Two hits, already ranked best-first (higher COSINE = closer).
@@ -195,6 +215,11 @@ def stub_validation(monkeypatch):
         console, "validate_column", lambda db, table, col, settings=None: col
     )
     monkeypatch.setattr(console, "primary_key", lambda db, table, settings=None: "id")
+    # Default: no numeric columns, so every selected column is treated as text
+    # (preserving pre-numeric-filter behaviour). Numeric tests override this.
+    monkeypatch.setattr(
+        console, "column_types", lambda db, table, settings=None: {}
+    )
     monkeypatch.setattr(
         console,
         "read_pk_text",
@@ -546,3 +571,203 @@ def test_search_milvus_unreachable_returns_error(monkeypatch, ok_ollama, client)
     body = resp.json()
     assert body["status"] == "error"
     assert body["results"] == []
+
+
+# --------------------------------------------------------------------------
+# Numeric range filtering
+# --------------------------------------------------------------------------
+def test_index_numeric_column_stored_as_scalar_field(
+    monkeypatch, stub_validation, ok_ollama
+):
+    """A selected NUMERIC column becomes a typed Milvus scalar field.
+
+    The embedded text is built from the TEXT column only; the numeric value is
+    inserted as its own aligned column and reported in ``numeric_fields``.
+    """
+    record = {}
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus(record))
+    # overview -> text, year -> int
+    monkeypatch.setattr(
+        console,
+        "column_types",
+        lambda db, table, settings=None: {"overview": "text", "year": "int"},
+    )
+    monkeypatch.setattr(
+        console,
+        "read_pk_columns",
+        lambda db, table, pk, columns, limit=1000, settings=None: [
+            {"pk": 1, "overview": "A heist in dreams", "year": 2010},
+            {"pk": 2, "overview": "A space epic", "year": 1968},
+        ],
+    )
+    seen: list[str] = []
+
+    def _capture(text, settings=None):
+        seen.append(text)
+        return [0.1, 0.2, 0.3]
+
+    monkeypatch.setattr(vectors, "embed_text", _capture)
+
+    result = vectors.build_index("shop", "films", ["overview", "year"])
+
+    assert result["status"] == "ok"
+    assert result["indexed"] == 2
+    # numeric field reported, text column split out from it
+    assert {"name": "year", "type": "int"} in result["numeric_fields"]
+    assert result["text_columns"] == ["overview"]
+    # embedding text is built from the TEXT column only (no "year:" line)
+    assert seen[0].startswith("overview: A heist in dreams")
+    assert "year:" not in seen[0]
+    # the schema declared a numeric scalar field "year" as INT64
+    assert ("year", "INT64") in record["schema_fields"]
+    # insert order: pks, vectors, texts, <year values>
+    inserted = record["inserted"]
+    assert inserted[0] == [1, 2]  # pks
+    assert inserted[3] == [2010, 1968]  # aligned int values
+
+
+def test_index_float_numeric_column_uses_double(
+    monkeypatch, stub_validation, ok_ollama
+):
+    """A DECIMAL/float column is stored as a DOUBLE scalar field."""
+    record = {}
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus(record))
+    monkeypatch.setattr(
+        console,
+        "column_types",
+        lambda db, table, settings=None: {"overview": "text", "rating": "decimal"},
+    )
+    monkeypatch.setattr(
+        console,
+        "read_pk_columns",
+        lambda db, table, pk, columns, limit=1000, settings=None: [
+            {"pk": 1, "overview": "great film", "rating": "4.5"},
+        ],
+    )
+    result = vectors.build_index("shop", "films", ["overview", "rating"])
+    assert {"name": "rating", "type": "float"} in result["numeric_fields"]
+    assert ("rating", "DOUBLE") in record["schema_fields"]
+    assert record["inserted"][3] == [4.5]
+
+
+def test_list_filter_fields_returns_numeric_fields(monkeypatch, client):
+    """GET /.../fields returns the collection's numeric scalar fields only."""
+    record = {}
+    fake = _make_fake_pymilvus(
+        record, extra_fields=[("year", "INT64"), ("rating", "DOUBLE")]
+    )
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    resp = client.get("/milvus/collections/shop_films/fields")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["collection"] == "shop_films"
+    assert {"name": "year", "type": "int"} in body["fields"]
+    assert {"name": "rating", "type": "float"} in body["fields"]
+    # reserved fields are excluded
+    names = [f["name"] for f in body["fields"]]
+    assert "pk" not in names and "embedding" not in names and "text" not in names
+
+
+def test_list_filter_fields_unreachable(client):
+    """No pymilvus available -> graceful unreachable payload, HTTP 200."""
+    sys.modules.pop("pymilvus", None)
+    resp = client.get("/api/milvus/collections/shop_films/fields")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["fields"] == []
+    assert body["status"] == "unreachable"
+
+
+def test_search_with_numeric_filter_builds_expr(monkeypatch, ok_ollama, client):
+    """A numeric filter is compiled into the Milvus ``expr`` for the search."""
+    record = {}
+    fake = _make_fake_pymilvus(record, extra_fields=[("year", "INT64")])
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    resp = client.post(
+        "/milvus/collections/shop_films/search",
+        json={
+            "query": "space",
+            "top_k": 5,
+            "filters": [{"field": "year", "op": "gte", "value": 2000}],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    # int-kind field -> integer literal, not 2000.0
+    assert record["search"]["expr"] == "year >= 2000"
+
+
+def test_search_multiple_filters_joined_with_and(monkeypatch, ok_ollama, client):
+    record = {}
+    fake = _make_fake_pymilvus(
+        record, extra_fields=[("year", "INT64"), ("rating", "DOUBLE")]
+    )
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    resp = client.post(
+        "/milvus/collections/shop_films/search",
+        json={
+            "query": "space",
+            "filters": [
+                {"field": "year", "op": "gte", "value": 2000},
+                {"field": "rating", "op": "gt", "value": 4},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert record["search"]["expr"] == "year >= 2000 and rating > 4.0"
+
+
+def test_search_no_filters_expr_is_none(monkeypatch, ok_ollama, client):
+    record = {}
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus(record))
+    resp = client.post(
+        "/milvus/collections/shop_films/search",
+        json={"query": "space", "top_k": 3},
+    )
+    assert resp.status_code == 200
+    assert record["search"]["expr"] is None
+
+
+def test_search_unknown_filter_field_returns_error(monkeypatch, ok_ollama, client):
+    """Filtering on a field that is not a numeric scalar field -> status:error."""
+    record = {}
+    # No numeric fields on the collection.
+    fake = _make_fake_pymilvus(record)
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    resp = client.post(
+        "/milvus/collections/shop_films/search",
+        json={
+            "query": "space",
+            "filters": [{"field": "year", "op": "gte", "value": 2000}],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "error"
+    assert "unknown filter field" in body["message"]
+    assert body["results"] == []
+    # the search itself was never executed
+    assert "search" not in record
+
+
+def test_search_unknown_filter_op_returns_error(monkeypatch, ok_ollama, client):
+    record = {}
+    fake = _make_fake_pymilvus(record, extra_fields=[("year", "INT64")])
+    monkeypatch.setitem(sys.modules, "pymilvus", fake)
+
+    resp = client.post(
+        "/milvus/collections/shop_films/search",
+        json={
+            "query": "space",
+            "filters": [{"field": "year", "op": "between", "value": 2000}],
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "error"
+    assert "unknown filter op" in body["message"]
