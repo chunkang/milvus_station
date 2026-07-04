@@ -6,6 +6,16 @@ four demonstration tables (``products``, ``articles``, ``movies`` and
 embeddable text rows so the data console / vector-index flow has content
 to work with out of the box.
 
+SEED GENERATION
+---------------
+Each table is seeded with 100+ rows that are generated *programmatically*
+at import time by composing curated component pools (product concepts,
+article topics, movie genres, FAQ categories, and so on). Composition is
+fully deterministic and index-driven -- no randomness and no dates read
+from the wall clock -- so the seed data is identical on every run and the
+tests stay stable. Every row carries a distinct, semantically varied value
+in its embeddable column so semantic search over the data is interesting.
+
 SECURITY & SCOPE
 ----------------
 * The table set is FIXED and hard-coded here. No identifier ever comes
@@ -33,6 +43,7 @@ monkeypatch with a fake connection/cursor so no live MariaDB is required.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any, Sequence
 
 from fastapi import HTTPException
@@ -71,8 +82,591 @@ class SampleTable:
         return f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
 
 
+# ==========================================================================
+# Seed generators
+#
+# Each builder composes curated component pools into 100+ unique rows. The
+# embeddable column (products.description, articles.body, movies.overview,
+# faqs.answer) is guaranteed distinct per row because it embeds the varying
+# component(s) that drive the composition.
+# ==========================================================================
+
+
 # --------------------------------------------------------------------------
-# products (~12 rows)
+# products (embed `description`)
+# --------------------------------------------------------------------------
+def _build_product_rows() -> list[tuple[Any, ...]]:
+    """Compose product rows from concept x brand/finish variants.
+
+    20 product concepts x 6 brand/finish modifiers = 120 rows. Each name and
+    description is unique because the (brand, finish, concept) triple varies.
+    """
+    # (noun, category, base_price, feature clause, use-case clause)
+    concepts: list[tuple[str, str, float, str, str]] = [
+        ("wireless headphones", "electronics", 149.99,
+         "deliver immersive sound with active noise cancellation and a marathon battery life",
+         "ideal for travel, commuting, and focused deep work"),
+        ("running shoes", "apparel", 89.95,
+         "cushion every stride with responsive foam and a breathable knit upper",
+         "built for daily training runs and race-day personal bests"),
+        ("burr coffee grinder", "home", 79.00,
+         "produce a consistent grind across thirty settings from espresso to French press",
+         "perfect for anyone chasing a better cup at home"),
+        ("yoga mat", "sports", 39.50,
+         "offer a non-slip, extra-cushioned surface that protects the joints",
+         "great for daily flows, pilates, and floor workouts"),
+        ("mechanical keyboard", "electronics", 119.00,
+         "pair hot-swappable switches with a sturdy aluminium frame and crisp keycaps",
+         "a favourite among programmers, writers, and gamers alike"),
+        ("LED desk lamp", "home", 45.50,
+         "cast flicker-free light with adjustable warmth and brightness",
+         "designed to reduce eye strain during long study sessions"),
+        ("travel backpack", "apparel", 99.00,
+         "organise your gear with a padded laptop sleeve and weatherproof zippers",
+         "sized for weekend getaways and busy daily commutes"),
+        ("insulated water bottle", "home", 29.99,
+         "keep drinks cold for twenty-four hours or hot for twelve behind a leakproof lid",
+         "made for the gym, the trail, and the office desk"),
+        ("smart thermostat", "home", 129.00,
+         "learn your routine and trim energy bills automatically",
+         "an easy upgrade for a more comfortable, efficient home"),
+        ("action camera", "electronics", 249.00,
+         "capture rock-steady 4K footage while staying waterproof to ten metres",
+         "ready for surfing, cycling, and every backcountry adventure"),
+        ("merino wool sweater", "apparel", 74.00,
+         "regulate temperature year-round with soft, breathable natural fibres",
+         "layers effortlessly for the office or a weekend hike"),
+        ("portable power bank", "electronics", 59.99,
+         "recharge a phone up to four times through fast dual-port output",
+         "a travel essential for long flights and festival weekends"),
+        ("down insulated jacket", "apparel", 159.00,
+         "pack serious warmth into a featherweight, stuffable shell",
+         "perfect for frosty commutes and alpine weekends"),
+        ("bluetooth speaker", "electronics", 69.00,
+         "fill a room with balanced sound and deep, distortion-free bass",
+         "splash-proof and ready for the kitchen, patio, or beach"),
+        ("cast iron skillet", "home", 42.00,
+         "sear, bake, and fry with even heat across a pre-seasoned surface",
+         "a lifetime workhorse for both stovetop and oven cooking"),
+        ("ergonomic office chair", "home", 219.00,
+         "support your back with adjustable lumbar tension and breathable mesh",
+         "engineered for full days at the desk without the aches"),
+        ("fitness tracker", "electronics", 99.00,
+         "monitor heart rate, sleep, and workouts on a weeklong battery",
+         "a gentle nudge toward healthier daily habits"),
+        ("waterproof hiking boots", "apparel", 139.00,
+         "grip loose terrain with a rugged sole and a supportive ankle collar",
+         "trail-ready for muddy climbs and long-distance treks"),
+        ("electric gooseneck kettle", "home", 64.00,
+         "reach a precise temperature in minutes with variable controls",
+         "a pour-over and loose-leaf tea lover's countertop companion"),
+        ("polarised sunglasses", "apparel", 55.00,
+         "cut glare and block UV behind lightweight, impact-resistant lenses",
+         "styled for driving, the water, and bright city days"),
+    ]
+    # (brand, finish/colour, quality adjective)
+    modifiers: list[tuple[str, str, str]] = [
+        ("Aurora", "midnight black", "premium"),
+        ("Summit", "slate gray", "rugged"),
+        ("Nimbus", "arctic white", "lightweight"),
+        ("Cascade", "forest green", "durable"),
+        ("Vertex", "deep navy", "compact"),
+        ("Lumen", "sand beige", "everyday"),
+    ]
+
+    rows: list[tuple[Any, ...]] = []
+    for ci, (noun, category, base_price, feature, usecase) in enumerate(concepts):
+        for mi, (brand, colour, adjective) in enumerate(modifiers):
+            name = f"{brand} {noun.title()} ({colour.title()})"
+            description = (
+                f"{adjective.capitalize()} {colour} {noun} that {feature}, "
+                f"{usecase}."
+            )
+            price = round(base_price + mi * 7.5, 2)
+            in_stock = 0 if (ci + mi) % 7 == 0 else 1
+            rows.append((name, description, category, price, in_stock))
+    return rows
+
+
+# --------------------------------------------------------------------------
+# articles (embed `body`)
+# --------------------------------------------------------------------------
+def _build_article_rows() -> list[tuple[Any, ...]]:
+    """Compose article rows from topic templates x subject pools.
+
+    8 topics x 13 subjects = 104 rows. Titles and bodies both embed the
+    subject, so each is unique. Publish dates are derived deterministically
+    from a fixed base date minus the running row index.
+    """
+    base_date = date(2026, 6, 30)
+    topics: list[dict[str, Any]] = [
+        {
+            "tag": "tech,innovation",
+            "author": "Dana Weber",
+            "headline": "The Quiet Rise of {S}",
+            "body": (
+                "{S} moved from research labs into everyday products this year. "
+                "Companies large and small are racing to adopt the approach, and "
+                "analysts expect the shift to accelerate over the coming quarter. "
+                "Supporters point to lower costs, while skeptics urge a careful rollout."
+            ),
+            "subjects": [
+                "open-source language models", "on-device AI assistants",
+                "edge computing chips", "battery recycling",
+                "autonomous delivery robots", "privacy-first browsers",
+                "augmented reality glasses", "low-earth-orbit internet",
+                "passwordless logins", "home energy storage",
+                "wearable health sensors", "digital identity wallets",
+                "solid-state batteries",
+            ],
+        },
+        {
+            "tag": "science,research",
+            "author": "Priya Nair",
+            "headline": "New Findings Reshape Our View of {S}",
+            "body": (
+                "A team of researchers has published fresh evidence about {s}. "
+                "The results challenge long-held assumptions and open new questions "
+                "for the field. Independent experts called the work careful and "
+                "compelling, while cautioning that more study is still needed."
+            ),
+            "subjects": [
+                "distant ocean moons", "coral reef recovery",
+                "ancient human migration", "deep-sea ecosystems",
+                "volcanic activity", "the early universe",
+                "migratory bird routes", "desert aquifers",
+                "glacier melt", "soil microbes", "solar weather",
+                "urban insect populations", "mountain water cycles",
+            ],
+        },
+        {
+            "tag": "travel,destinations",
+            "author": "Marco Ferretti",
+            "headline": "A Slow Week Exploring {S}",
+            "body": (
+                "There is no better way to appreciate {s} than to take your time. "
+                "Our writer spent a week wandering its quiet corners, trading a rushed "
+                "itinerary for long lunches and unplanned detours. The reward was a "
+                "trip that felt personal rather than packaged."
+            ),
+            "subjects": [
+                "the Alpine railways", "coastal Portugal", "rural Japan",
+                "the Scottish Highlands", "the Amalfi Coast", "Patagonia",
+                "the Baltic capitals", "Morocco's medinas",
+                "the Norwegian fjords", "Vietnam's river deltas",
+                "the Canadian Rockies", "Iceland's ring road",
+                "the Greek islands",
+            ],
+        },
+        {
+            "tag": "food,cooking",
+            "author": "Helen Brooks",
+            "headline": "Rediscovering {S} at Home",
+            "body": (
+                "Home cooks are falling back in love with {s}. A new wave of simple, "
+                "seasonal recipes has stripped away the fuss and put the focus on "
+                "good ingredients and a little patience. We break down the handful of "
+                "steps that make all the difference."
+            ),
+            "subjects": [
+                "slow-fermented bread", "one-pot weeknight dinners",
+                "homemade pasta", "regional curries", "preserving and pickling",
+                "wood-fired pizza", "plant-forward cooking", "handmade dumplings",
+                "classic French sauces", "street-food snacks",
+                "low-waste cooking", "fresh herb gardens", "artisan cheese boards",
+            ],
+        },
+        {
+            "tag": "finance,money",
+            "author": "Samuel Osei",
+            "headline": "A Plain-Language Guide to {S}",
+            "body": (
+                "For anyone confused by {s}, the basics are simpler than they look. "
+                "This guide cuts through the jargon with clear examples and a few "
+                "rules of thumb. The goal is to help you make confident decisions "
+                "without taking on risk you do not understand."
+            ),
+            "subjects": [
+                "high-yield savings", "index fund investing", "building an emergency fund",
+                "paying down debt", "understanding credit scores", "budgeting that sticks",
+                "retirement accounts", "reading an interest rate", "tax-loss basics",
+                "diversifying a portfolio", "inflation and your cash",
+                "first-time home buying", "side-income taxes",
+            ],
+        },
+        {
+            "tag": "health,wellbeing",
+            "author": "Aisha Rahman",
+            "headline": "What the Science Says About {S}",
+            "body": (
+                "Everyone has an opinion about {s}, but what does the evidence show? "
+                "We reviewed recent studies and spoke with clinicians to separate the "
+                "practical advice from the hype. The takeaway is reassuringly modest: "
+                "small, consistent habits matter more than any quick fix."
+            ),
+            "subjects": [
+                "better sleep", "strength training after forty", "gut health",
+                "managing screen time", "hydration myths", "walking for fitness",
+                "stress and breathing", "the Mediterranean diet", "morning sunlight",
+                "recovery and rest days", "mindful eating", "posture at the desk",
+                "cold-water swimming",
+            ],
+        },
+        {
+            "tag": "sport,competition",
+            "author": "Toby Grant",
+            "headline": "Inside the Comeback in {S}",
+            "body": (
+                "This season delivered one of the great stories in {s}. Underdogs "
+                "found form at exactly the right moment, and a few tactical tweaks "
+                "reshaped the whole competition. We look at how it happened and what "
+                "it means for the campaigns ahead."
+            ),
+            "subjects": [
+                "grassroots cycling", "women's football", "long-distance running",
+                "amateur rowing", "club rugby", "table tennis", "open-water swimming",
+                "indoor climbing", "youth athletics", "para sport",
+                "mixed doubles tennis", "regional cricket", "urban skateboarding",
+            ],
+        },
+        {
+            "tag": "culture,arts",
+            "author": "Lena Fischer",
+            "headline": "How {S} Is Finding a New Audience",
+            "body": (
+                "Once considered niche, {s} is drawing curious newcomers in growing "
+                "numbers. Small venues and online communities have lowered the barrier "
+                "to entry, and a fresh generation of makers is reinterpreting old forms. "
+                "We spoke with several about what keeps them going."
+            ),
+            "subjects": [
+                "independent cinema", "vinyl records", "modern poetry",
+                "community theatre", "documentary photography", "folk music revivals",
+                "printmaking", "board-game design", "public murals",
+                "audio drama", "contemporary dance", "small-press comics",
+                "traditional crafts",
+            ],
+        },
+    ]
+
+    rows: list[tuple[Any, ...]] = []
+    index = 0
+    for topic in topics:
+        for subject in topic["subjects"]:
+            title = topic["headline"].format(s=subject, S=subject.capitalize())
+            body = topic["body"].format(s=subject, S=subject.capitalize())
+            published_at = (base_date - timedelta(days=index)).isoformat()
+            rows.append((title, body, topic["author"], topic["tag"], published_at))
+            index += 1
+    return rows
+
+
+# --------------------------------------------------------------------------
+# movies (embed `overview`)
+# --------------------------------------------------------------------------
+# A handful of curated, real films kick off the list with hand-written plot
+# overviews; the remainder are composed across genres so we reach 100+.
+_CURATED_MOVIES: tuple[tuple[Any, ...], ...] = (
+    ("The Shawshank Redemption",
+     "A banker sentenced to life in prison forms an enduring friendship and "
+     "quietly holds on to hope over two long decades behind bars.",
+     "Drama", 1994, 9.3),
+    ("Inception",
+     "A thief who steals corporate secrets through dream-sharing technology is "
+     "offered a chance to erase his past by planting an idea in a target's mind.",
+     "Science Fiction", 2010, 8.8),
+    ("The Godfather",
+     "The aging patriarch of a crime dynasty transfers control of his "
+     "clandestine empire to his reluctant youngest son.",
+     "Crime", 1972, 9.2),
+    ("Spirited Away",
+     "A young girl wanders into a world of spirits and gods and must find the "
+     "courage to free her parents and return home.",
+     "Animation", 2001, 8.6),
+    ("The Dark Knight",
+     "Batman faces the Joker, a criminal mastermind who plunges Gotham into "
+     "chaos and tests the thin line between hero and vigilante.",
+     "Action", 2008, 9.0),
+    ("Parasite",
+     "A poor family schemes to become employed by a wealthy household, until a "
+     "shocking discovery upends their carefully laid plan.",
+     "Thriller", 2019, 8.5),
+    ("Forrest Gump",
+     "Through sheer decency and luck, a good-hearted man from Alabama finds "
+     "himself at the center of decades of American history.",
+     "Drama", 1994, 8.8),
+    ("Interstellar",
+     "As Earth grows unlivable, a former pilot leads a mission through a "
+     "wormhole in a desperate search for a new home for humanity.",
+     "Science Fiction", 2014, 8.6),
+    ("The Matrix",
+     "A hacker discovers that reality is a simulation and joins a rebellion to "
+     "overthrow the machines that enslave humankind.",
+     "Science Fiction", 1999, 8.7),
+    ("Coco",
+     "A boy who dreams of becoming a musician journeys into the Land of the "
+     "Dead to uncover his family's long-buried history.",
+     "Animation", 2017, 8.4),
+    ("Pulp Fiction",
+     "The lives of two hit men, a boxer, and a pair of diner robbers intertwine "
+     "in four tales of violence and unexpected redemption.",
+     "Crime", 1994, 8.9),
+    ("Whiplash",
+     "An ambitious young drummer clashes with a ruthless instructor whose "
+     "brutal methods push him to the edge of his talent.",
+     "Drama", 2014, 8.5),
+)
+
+
+def _build_movie_rows() -> list[tuple[Any, ...]]:
+    """Curated real films plus composed synopses across ten genres.
+
+    12 curated + (10 genres x 10 protagonists) = 112 rows. Composed titles are
+    built from prefix/noun pools so each is unique, and every overview embeds
+    both the genre template and the protagonist, guaranteeing distinct text.
+    """
+    rows: list[tuple[Any, ...]] = list(_CURATED_MOVIES)
+
+    # (genre, overview template with a {role} slot)
+    genres: list[tuple[str, str]] = [
+        ("Drama",
+         "A {role} confronts a painful secret from the past and must choose "
+         "between protecting the family and finally telling the truth."),
+        ("Thriller",
+         "When a routine day turns deadly, a {role} races against the clock to "
+         "expose a conspiracy before it silences them for good."),
+        ("Science Fiction",
+         "In a near-future city, a {role} discovers a technology that could "
+         "save humanity or erase it, and must decide who to trust."),
+        ("Romance",
+         "A {role} and a stranger cross paths by chance, and one unforgettable "
+         "season forces them both to risk everything for love."),
+        ("Comedy",
+         "A {role} stumbles into one absurd mishap after another, learning that "
+         "the best-laid plans rarely survive contact with real life."),
+        ("Horror",
+         "A {role} moves into a quiet house where the walls seem to whisper, and "
+         "the line between nightmare and waking slowly begins to blur."),
+        ("Adventure",
+         "A {role} sets out on a perilous journey across uncharted country, "
+         "chasing a legend that everyone else swears is only a myth."),
+        ("Mystery",
+         "After a neighbour vanishes without a trace, a {role} follows a trail "
+         "of small clues that leads somewhere no one expected."),
+        ("Fantasy",
+         "Gifted with a power they never asked for, a {role} must unite a "
+         "fractured kingdom before an ancient darkness returns."),
+        ("Crime",
+         "A {role} is pulled into the city's underworld and must outwit both the "
+         "law and the syndicate to protect the people they love."),
+    ]
+    roles: list[str] = [
+        "young detective", "retired soldier", "small-town teacher",
+        "struggling musician", "brilliant scientist", "single parent",
+        "ambitious lawyer", "weary journalist", "runaway teenager",
+        "seasoned pilot",
+    ]
+    title_prefixes = [
+        "The Last", "Silent", "Broken", "Midnight", "Distant", "Crimson",
+        "Hollow", "Golden", "Frozen", "Restless", "Quiet", "Burning",
+    ]
+    title_nouns = [
+        "Horizon", "Promise", "Empire", "Harbor", "Requiem", "Frontier",
+        "Lullaby", "Verdict", "Odyssey", "Mirage", "Covenant", "Ember",
+    ]
+
+    i = 0
+    for gi, (genre, template) in enumerate(genres):
+        for ri, role in enumerate(roles):
+            prefix = title_prefixes[i % len(title_prefixes)]
+            noun = title_nouns[(i // len(title_prefixes)) % len(title_nouns)]
+            title = f"{prefix} {noun}"
+            overview = template.format(role=role)
+            year = 1995 + ((gi * 7 + ri * 3) % 30)
+            rating = round(6.3 + ((gi * 3 + ri * 5) % 27) / 10.0, 1)
+            rows.append((title, overview, genre, year, rating))
+            i += 1
+    return rows
+
+
+# --------------------------------------------------------------------------
+# faqs (embed `answer`)
+# --------------------------------------------------------------------------
+def _build_faq_rows() -> list[tuple[Any, ...]]:
+    """Compose support Q&A pairs across ten categories.
+
+    10 categories x 11 subjects = 110 rows. Both the question and the answer
+    embed the category-specific subject, so each question and each answer is
+    unique across the whole set.
+    """
+    groups: list[dict[str, Any]] = [
+        {
+            "category": "account",
+            "q": "How do I {s}?",
+            "a": (
+                "To {s}, open Account Settings and choose the matching option. "
+                "Follow the guided steps and the change is applied to your account "
+                "right away. If you get stuck, our support team can walk you through it."
+            ),
+            "subjects": [
+                "reset my password", "change my email address",
+                "update my profile photo", "close my account",
+                "recover a locked account", "merge two accounts",
+                "change my username", "set a display name",
+                "link a social login", "verify my identity",
+                "export my account data",
+            ],
+        },
+        {
+            "category": "billing",
+            "q": "What should I do about {s}?",
+            "a": (
+                "If you have a question about {s}, open the Billing page where every "
+                "transaction is listed in detail. Most issues can be resolved there in "
+                "a few clicks, and anything unusual can be sent to our team for review."
+            ),
+            "subjects": [
+                "a failed payment", "a duplicate charge", "an unexpected fee",
+                "updating my card", "a missing invoice", "changing my billing cycle",
+                "applying a promo code", "a currency conversion", "a partial refund",
+                "a disputed charge", "tax on my invoice",
+            ],
+        },
+        {
+            "category": "shipping",
+            "q": "How does {s} work?",
+            "a": (
+                "For {s}, you can review the full details on the Shipping page during "
+                "checkout. Estimated timing and any costs are shown before you confirm, "
+                "and a tracking link is emailed the moment your parcel leaves our warehouse."
+            ),
+            "subjects": [
+                "standard delivery", "express shipping", "international orders",
+                "order tracking", "delivery to a pickup point", "weekend delivery",
+                "shipping insurance", "split shipments", "an address change",
+                "signature on delivery", "free shipping thresholds",
+            ],
+        },
+        {
+            "category": "returns",
+            "q": "Can I get help with {s}?",
+            "a": (
+                "Yes. For {s}, start from the Orders page and pick the item involved. "
+                "We will guide you through the return or replacement, and most refunds "
+                "reach your original payment method within a few business days."
+            ),
+            "subjects": [
+                "returning an item", "a damaged product", "an incorrect order",
+                "a late refund", "exchanging a size", "printing a return label",
+                "a missing part", "a gift return", "a warranty claim",
+                "a bulk return", "a restocking fee",
+            ],
+        },
+        {
+            "category": "technical",
+            "q": "Why am I seeing {s}?",
+            "a": (
+                "If you are seeing {s}, first update to the latest version and restart "
+                "the app to clear temporary memory. When the problem continues, a clean "
+                "reinstall usually resolves it, since your data is stored safely in the "
+                "cloud and syncs back automatically."
+            ),
+            "subjects": [
+                "the app crashing on launch", "slow loading times", "a blank screen",
+                "a sync error", "missing notifications", "a login loop",
+                "a broken image", "an upload failure", "a frozen page",
+                "an unexpected error code", "a playback issue",
+            ],
+        },
+        {
+            "category": "privacy",
+            "q": "How do you handle {s}?",
+            "a": (
+                "When it comes to {s}, we follow a strict, transparency-first policy. "
+                "You can review exactly what we collect and adjust your choices in "
+                "Privacy settings at any time, and we never sell your personal "
+                "information to outside parties."
+            ),
+            "subjects": [
+                "my personal data", "cookies and tracking", "data deletion requests",
+                "third-party sharing", "location information", "marketing preferences",
+                "data encryption", "account visibility", "children's privacy",
+                "data breach alerts", "analytics collection",
+            ],
+        },
+        {
+            "category": "subscription",
+            "q": "How do I manage {s}?",
+            "a": (
+                "To manage {s}, open Billing and choose Manage subscription. Changes "
+                "take effect at the start of your next billing period, and you keep "
+                "full access to your current plan until then."
+            ),
+            "subjects": [
+                "my subscription plan", "an upgrade", "a downgrade", "auto-renewal",
+                "a free trial", "pausing my plan", "canceling my plan",
+                "a family plan", "a student discount", "switching to annual billing",
+                "reactivating a plan",
+            ],
+        },
+        {
+            "category": "security",
+            "q": "How can I secure {s}?",
+            "a": (
+                "To secure {s}, head to Security settings where you can enable extra "
+                "protection in a couple of steps. We recommend turning on two-factor "
+                "authentication and keeping your recovery codes somewhere safe and offline."
+            ),
+            "subjects": [
+                "my account", "two-factor authentication", "a lost device",
+                "suspicious activity", "my active login sessions", "app passwords",
+                "recovery codes", "a phishing email", "trusted devices",
+                "password strength", "a compromised password",
+            ],
+        },
+        {
+            "category": "mobile-app",
+            "q": "How do I use {s} in the mobile app?",
+            "a": (
+                "You can set up {s} from the mobile app's Settings menu. Toggle the "
+                "feature on, grant any permissions it asks for, and your preference is "
+                "saved and synced to every device signed in to your account."
+            ),
+            "subjects": [
+                "offline mode", "push notifications", "biometric login", "the dark theme",
+                "widget shortcuts", "data saver mode", "in-app search",
+                "syncing across devices", "the camera scanner", "gesture controls",
+                "accessibility options",
+            ],
+        },
+        {
+            "category": "orders",
+            "q": "What happens with {s}?",
+            "a": (
+                "For {s}, the Orders page shows the current status and every available "
+                "action. You can make most changes there while the order is still being "
+                "prepared, and we email you an update whenever the status changes."
+            ),
+            "subjects": [
+                "a canceled order", "an out-of-stock item", "a pre-order",
+                "a backordered product", "order confirmation", "editing an order",
+                "combining orders", "a gift message", "an order on hold",
+                "bulk ordering", "my order history",
+            ],
+        },
+    ]
+
+    rows: list[tuple[Any, ...]] = []
+    for group in groups:
+        for subject in group["subjects"]:
+            question = group["q"].format(s=subject)
+            answer = group["a"].format(s=subject)
+            rows.append((question, answer, group["category"]))
+    return rows
+
+
+# --------------------------------------------------------------------------
+# Table definitions (schemas unchanged; rows generated programmatically)
 # --------------------------------------------------------------------------
 _PRODUCTS = SampleTable(
     name="products",
@@ -89,111 +683,10 @@ _PRODUCTS = SampleTable(
         f") {_TABLE_OPTS}"
     ),
     columns=("name", "description", "category", "price", "in_stock"),
-    rows=[
-        (
-            "Aurora Wireless Headphones",
-            "Immersive over-ear headphones with active noise cancellation and "
-            "a 40-hour battery, tuned for rich bass and crisp vocals.",
-            "electronics",
-            199.99,
-            1,
-        ),
-        (
-            "Nimbus Smart Thermostat",
-            "Learns your daily routine and adjusts the temperature "
-            "automatically, trimming energy bills while keeping every room "
-            "comfortable.",
-            "home",
-            129.00,
-            1,
-        ),
-        (
-            "TrailBlazer Pro Running Shoes",
-            "Lightweight trail runners with a grippy outsole and responsive "
-            "foam midsole built to carry you comfortably over any terrain.",
-            "apparel",
-            89.95,
-            1,
-        ),
-        (
-            "Lumen Desk Lamp",
-            "A minimalist LED desk lamp with adjustable warmth and brightness, "
-            "plus a built-in USB-C port to keep your devices charged.",
-            "home",
-            45.50,
-            1,
-        ),
-        (
-            "The Quiet Tide",
-            "A sweeping literary novel about family, memory, and the sea that "
-            "critics are calling the standout debut of the year.",
-            "books",
-            18.99,
-            1,
-        ),
-        (
-            "Cascade Stainless Water Bottle",
-            "A vacuum-insulated bottle that keeps drinks cold for 24 hours or "
-            "hot for 12, with a leakproof lid made for busy commutes.",
-            "home",
-            29.99,
-            1,
-        ),
-        (
-            "Pixel 4K Action Camera",
-            "A pocket-sized action camera that captures stunning 4K footage "
-            "with rock-steady stabilization, waterproof to 10 meters.",
-            "electronics",
-            249.00,
-            0,
-        ),
-        (
-            "Meridian Merino Sweater",
-            "A breathable merino wool sweater that regulates temperature "
-            "year-round and layers effortlessly for work or weekends.",
-            "apparel",
-            74.00,
-            1,
-        ),
-        (
-            "GreenThumb Herb Garden Kit",
-            "Everything you need to grow fresh basil, mint, and cilantro "
-            "indoors, including self-watering pots and organic seeds.",
-            "home",
-            34.95,
-            1,
-        ),
-        (
-            "Cook Smart: 100 Weeknight Meals",
-            "A practical cookbook packed with fast, wholesome recipes that turn "
-            "everyday pantry staples into memorable dinners.",
-            "books",
-            24.50,
-            1,
-        ),
-        (
-            "Voltix Portable Power Bank",
-            "A 20,000mAh power bank with fast charging and dual USB-C ports, "
-            "enough to recharge a phone up to four times on a single charge.",
-            "electronics",
-            59.99,
-            1,
-        ),
-        (
-            "Summit Insulated Jacket",
-            "A packable down jacket that delivers serious warmth without the "
-            "bulk, ideal for cold commutes and mountain weekends alike.",
-            "apparel",
-            149.00,
-            1,
-        ),
-    ],
+    rows=_build_product_rows(),
 )
 
 
-# --------------------------------------------------------------------------
-# articles (~10 rows)
-# --------------------------------------------------------------------------
 _ARTICLES = SampleTable(
     name="articles",
     create_sql=(
@@ -208,112 +701,10 @@ _ARTICLES = SampleTable(
         f") {_TABLE_OPTS}"
     ),
     columns=("title", "body", "author", "tags", "published_at"),
-    rows=[
-        (
-            "Open-Source Model Rivals the Giants",
-            "A new open-source language model released this week matches the "
-            "performance of far larger commercial systems on common "
-            "benchmarks. Researchers say the compact design could bring "
-            "advanced AI to devices that run entirely offline.",
-            "Dana Weber",
-            "tech,ai,open-source",
-            "2026-02-11",
-        ),
-        (
-            "Astronomers Map a Hidden Ocean World",
-            "Using data from a long-running space telescope, scientists have "
-            "identified strong evidence of a liquid ocean beneath the icy "
-            "crust of a distant moon. The discovery renews interest in the "
-            "search for life beyond Earth.",
-            "Priya Nair",
-            "science,space,astronomy",
-            "2026-01-29",
-        ),
-        (
-            "A Slow Train Through the Alps",
-            "There is no faster way to fall in love with a mountain range than "
-            "to cross it by rail. Our writer spent five days riding scenic "
-            "lines between quiet villages, trading speed for sweeping views "
-            "and unhurried afternoons.",
-            "Marco Ferretti",
-            "travel,europe,rail",
-            "2026-03-04",
-        ),
-        (
-            "The Comeback of the Home-Cooked Loaf",
-            "Home baking never really went away, but a fresh generation of "
-            "cooks is rediscovering the simple pleasure of bread. We break "
-            "down the handful of ingredients and the patience it takes to "
-            "pull a golden loaf from your own oven.",
-            "Helen Brooks",
-            "food,baking,recipes",
-            "2026-02-22",
-        ),
-        (
-            "What Rising Rates Mean for Your Savings",
-            "As central banks hold interest rates steady, savers finally have "
-            "options that outpace inflation. Here is a plain-language guide to "
-            "where your cash can work harder without taking on undue risk.",
-            "Samuel Osei",
-            "finance,personal-finance,savings",
-            "2026-01-15",
-        ),
-        (
-            "Tiny Sensors, Greener Cities",
-            "Low-cost air-quality sensors are quietly reshaping how cities "
-            "respond to pollution. By mapping problem areas block by block, "
-            "planners can target traffic changes and green spaces where they "
-            "matter most.",
-            "Lena Fischer",
-            "tech,environment,cities",
-            "2026-03-18",
-        ),
-        (
-            "The Physics of a Perfect Cup of Coffee",
-            "Why does one pour-over taste bright and another taste bitter? It "
-            "comes down to temperature, grind size, and time. We visited a lab "
-            "that studies extraction to explain the science in your morning "
-            "routine.",
-            "Toby Grant",
-            "science,food,coffee",
-            "2026-02-06",
-        ),
-        (
-            "Working Remotely From a Small Island",
-            "With a laptop and a reliable connection, a growing number of "
-            "professionals are trading city apartments for island life. We "
-            "look at the practical trade-offs, from time zones to community, "
-            "for anyone tempted to make the leap.",
-            "Aisha Rahman",
-            "travel,remote-work,lifestyle",
-            "2026-03-11",
-        ),
-        (
-            "A Simple Budget That Actually Sticks",
-            "Most budgets fail because they are too complicated to follow. "
-            "This approach uses three broad categories and a single monthly "
-            "check-in, making it easy to see where your money goes without "
-            "tracking every receipt.",
-            "Samuel Osei",
-            "finance,budgeting,how-to",
-            "2026-01-08",
-        ),
-        (
-            "Robots Learn to Fold the Laundry",
-            "A research team has trained a general-purpose robot to handle "
-            "soft, unpredictable objects like clothing. The advance hints at a "
-            "future where household chores are shared with capable machines.",
-            "Dana Weber",
-            "tech,ai,robotics",
-            "2026-02-27",
-        ),
-    ],
+    rows=_build_article_rows(),
 )
 
 
-# --------------------------------------------------------------------------
-# movies (~12 rows)
-# --------------------------------------------------------------------------
 _MOVIES = SampleTable(
     name="movies",
     create_sql=(
@@ -328,111 +719,10 @@ _MOVIES = SampleTable(
         f") {_TABLE_OPTS}"
     ),
     columns=("title", "overview", "genre", "year", "rating"),
-    rows=[
-        (
-            "The Shawshank Redemption",
-            "A banker sentenced to life in prison forms an enduring friendship "
-            "and quietly holds on to hope over two long decades behind bars.",
-            "Drama",
-            1994,
-            9.3,
-        ),
-        (
-            "Inception",
-            "A thief who steals corporate secrets through dream-sharing "
-            "technology is offered a chance to erase his past by planting an "
-            "idea in a target's mind.",
-            "Science Fiction",
-            2010,
-            8.8,
-        ),
-        (
-            "The Godfather",
-            "The aging patriarch of a crime dynasty transfers control of his "
-            "clandestine empire to his reluctant youngest son.",
-            "Crime",
-            1972,
-            9.2,
-        ),
-        (
-            "Spirited Away",
-            "A young girl wanders into a world of spirits and gods and must "
-            "find the courage to free her parents and return home.",
-            "Animation",
-            2001,
-            8.6,
-        ),
-        (
-            "The Dark Knight",
-            "Batman faces the Joker, a criminal mastermind who plunges Gotham "
-            "into chaos and tests the thin line between hero and vigilante.",
-            "Action",
-            2008,
-            9.0,
-        ),
-        (
-            "Parasite",
-            "A poor family schemes to become employed by a wealthy household, "
-            "until a shocking discovery upends their carefully laid plan.",
-            "Thriller",
-            2019,
-            8.5,
-        ),
-        (
-            "Forrest Gump",
-            "Through sheer decency and luck, a good-hearted man from Alabama "
-            "finds himself at the center of decades of American history.",
-            "Drama",
-            1994,
-            8.8,
-        ),
-        (
-            "Interstellar",
-            "As Earth grows unlivable, a former pilot leads a mission through "
-            "a wormhole in a desperate search for a new home for humanity.",
-            "Science Fiction",
-            2014,
-            8.6,
-        ),
-        (
-            "The Matrix",
-            "A hacker discovers that reality is a simulation and joins a "
-            "rebellion to overthrow the machines that enslave humankind.",
-            "Science Fiction",
-            1999,
-            8.7,
-        ),
-        (
-            "Coco",
-            "A boy who dreams of becoming a musician journeys into the Land of "
-            "the Dead to uncover his family's long-buried history.",
-            "Animation",
-            2017,
-            8.4,
-        ),
-        (
-            "Pulp Fiction",
-            "The lives of two hit men, a boxer, and a pair of diner robbers "
-            "intertwine in four tales of violence and unexpected redemption.",
-            "Crime",
-            1994,
-            8.9,
-        ),
-        (
-            "Whiplash",
-            "An ambitious young drummer clashes with a ruthless instructor "
-            "whose brutal methods push him to the edge of his talent.",
-            "Drama",
-            2014,
-            8.5,
-        ),
-    ],
+    rows=_build_movie_rows(),
 )
 
 
-# --------------------------------------------------------------------------
-# faqs (~15 rows)
-# --------------------------------------------------------------------------
 _FAQS = SampleTable(
     name="faqs",
     create_sql=(
@@ -445,113 +735,7 @@ _FAQS = SampleTable(
         f") {_TABLE_OPTS}"
     ),
     columns=("question", "answer", "category"),
-    rows=[
-        (
-            "How do I reset my password?",
-            "Go to the sign-in page and choose Forgot password. Enter the "
-            "email on your account and we will send a secure reset link that "
-            "stays valid for one hour. Follow it to set a new password.",
-            "account",
-        ),
-        (
-            "How can I change the email address on my account?",
-            "Open Account Settings, select Profile, and update the email "
-            "field. We will send a confirmation message to the new address; "
-            "the change takes effect once you click the link inside it.",
-            "account",
-        ),
-        (
-            "Why was I charged twice this month?",
-            "Duplicate charges are usually a temporary authorization hold that "
-            "clears within a few business days. If a second charge still shows "
-            "after five days, contact support and we will investigate.",
-            "billing",
-        ),
-        (
-            "How do I update my payment method?",
-            "In Billing, select Payment methods, then add a new card and mark "
-            "it as default. Your next invoice will use the updated card, and "
-            "you can safely remove the old one afterward.",
-            "billing",
-        ),
-        (
-            "Can I get a refund?",
-            "Refunds are available within 30 days of purchase for most plans. "
-            "Submit a request from the Billing page and, once approved, the "
-            "amount is returned to your original payment method.",
-            "billing",
-        ),
-        (
-            "How long does shipping take?",
-            "Standard shipping arrives in three to five business days, while "
-            "express orders placed before noon usually arrive the next day. "
-            "You will receive tracking details as soon as your order ships.",
-            "shipping",
-        ),
-        (
-            "Do you ship internationally?",
-            "Yes, we ship to more than 60 countries. International delivery "
-            "times vary from 7 to 14 business days, and any customs duties are "
-            "calculated and shown at checkout before you pay.",
-            "shipping",
-        ),
-        (
-            "How do I track my order?",
-            "Once your order ships, we email a tracking number and a link to "
-            "the carrier. You can also find live tracking under Orders in your "
-            "account at any time.",
-            "shipping",
-        ),
-        (
-            "My order arrived damaged. What should I do?",
-            "We are sorry to hear that. Take a photo of the damage and start a "
-            "return from the Orders page within 14 days; we will send a "
-            "replacement or issue a full refund at no cost to you.",
-            "shipping",
-        ),
-        (
-            "How do I cancel my subscription?",
-            "Open Billing, choose Manage subscription, and select Cancel. Your "
-            "plan stays active until the end of the current billing period, "
-            "after which no further charges are made.",
-            "billing",
-        ),
-        (
-            "Is my personal data secure?",
-            "We encrypt data in transit and at rest, and we never sell your "
-            "personal information. You can review exactly what we store and "
-            "request deletion at any time from Privacy settings.",
-            "account",
-        ),
-        (
-            "The app keeps crashing on launch. How do I fix it?",
-            "First make sure you are on the latest version, then restart your "
-            "device to clear memory. If the problem persists, reinstall the "
-            "app; your data is stored in the cloud and will sync back.",
-            "technical",
-        ),
-        (
-            "How do I enable two-factor authentication?",
-            "Under Security settings, turn on two-factor authentication and "
-            "scan the QR code with an authenticator app. Save the backup codes "
-            "somewhere safe in case you lose access to your phone.",
-            "account",
-        ),
-        (
-            "Why am I not receiving email notifications?",
-            "Check that notifications are enabled under Preferences and look "
-            "in your spam folder. Adding our address to your contacts helps "
-            "ensure future messages land in your inbox.",
-            "technical",
-        ),
-        (
-            "How do I contact customer support?",
-            "You can reach us through the in-app chat during business hours or "
-            "by opening a ticket from the Help Center. Most inquiries receive "
-            "a response within one business day.",
-            "account",
-        ),
-    ],
+    rows=_build_faq_rows(),
 )
 
 

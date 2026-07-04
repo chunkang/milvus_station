@@ -19,6 +19,18 @@ from app.main import app
 APP_DB = get_settings().mariadb_db  # "milvus_station" by default
 SAMPLE_NAMES = [t.name for t in samples.SAMPLE_TABLES]
 
+# The minimum number of seed rows every sample table must carry so that
+# semantic search over the demo data returns interesting neighbours.
+MIN_SEED_ROWS = 100
+
+# Index of the embeddable column within each table's row tuple.
+EMBED_COLUMN_INDEX = {
+    "products": 1,  # description
+    "articles": 1,  # body
+    "movies": 1,  # overview
+    "faqs": 1,  # answer
+}
+
 
 class FakeCursor:
     """Records SQL and returns canned COUNT(*) rows.
@@ -62,7 +74,7 @@ class FakeCursor:
         if kind == "exists":
             return {"cnt": 1 if name in self._existing else 0}
         if kind == "count":
-            return {"cnt": 12 if name in self._existing else 0}
+            return {"cnt": 128 if name in self._existing else 0}
         return None
 
     def __enter__(self):
@@ -158,7 +170,7 @@ def test_import_issues_create_and_insert_for_each_table(fresh_db, client):
         assert any(f"`{name}`" in c[1] for c in creates), f"no CREATE for {name}"
         assert any(f"`{name}`" in i[1] for i in inserts), f"no INSERT for {name}"
 
-    # Row counts inserted match the fixed seed data sizes.
+    # Row counts inserted match the generated seed data sizes.
     by_table = {i[1].split("`")[1]: len(i[2]) for i in inserts}
     for table in samples.SAMPLE_TABLES:
         assert by_table[table.name] == len(table.rows)
@@ -205,10 +217,35 @@ def test_import_idempotent_no_reinsert(seeded_db, client):
     assert len(creates) == len(SAMPLE_NAMES)
 
 
-def test_seed_data_sizes_are_reasonable():
-    """Fixed seed sets match the documented approximate row counts."""
+# --------------------------------------------------------------------------
+# Seed data: every table carries a large, richly-varied set of rows
+# --------------------------------------------------------------------------
+def test_every_table_seeds_at_least_100_rows():
+    """Each sample table must seed at least 100 rows for useful search."""
     sizes = {t.name: len(t.rows) for t in samples.SAMPLE_TABLES}
-    assert sizes["products"] >= 12
-    assert sizes["articles"] >= 10
-    assert sizes["movies"] >= 12
-    assert sizes["faqs"] >= 15
+    assert set(sizes) == set(SAMPLE_NAMES)
+    for name, size in sizes.items():
+        assert size >= MIN_SEED_ROWS, f"{name} seeds only {size} rows"
+
+
+def test_embeddable_column_values_are_distinct():
+    """The embeddable text must be unique per row (no degenerate repeats)."""
+    for table in samples.SAMPLE_TABLES:
+        idx = EMBED_COLUMN_INDEX[table.name]
+        values = [row[idx] for row in table.rows]
+        distinct = set(values)
+        # Every embeddable value is unique across the whole seed set...
+        assert len(distinct) == len(values), (
+            f"{table.name} has duplicate embeddable text"
+        )
+        # ...and there are plenty of them for semantic search to be useful.
+        assert len(distinct) >= MIN_SEED_ROWS
+
+
+def test_first_column_values_are_distinct():
+    """Names/titles/questions are unique too, not 'Product 1', 'Product 2'."""
+    for table in samples.SAMPLE_TABLES:
+        first = [row[0] for row in table.rows]
+        assert len(set(first)) == len(first), (
+            f"{table.name} has duplicate primary text in column 0"
+        )
