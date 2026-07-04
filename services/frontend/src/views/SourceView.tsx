@@ -6,6 +6,7 @@ import {
   DownloadCloud,
   FlaskConical,
   Loader2,
+  Search,
   Sparkles,
   Table2,
   TriangleAlert,
@@ -363,9 +364,27 @@ export default function SourceView() {
       {activeTable && (
         <Card className="mt-6">
           <CardHeader>
-            <CardTitle className="text-base">
-              {activeDb} · {activeTable}
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-base">
+                {activeDb} · {activeTable}
+              </CardTitle>
+              {activeDb &&
+                collections.has(collectionNameFor(activeDb, activeTable)) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setTestCollection(
+                        collectionNameFor(activeDb, activeTable)
+                      )
+                    }
+                  >
+                    <Search className="size-4" />
+                    Test
+                  </Button>
+                )}
+            </div>
           </CardHeader>
           <CardContent>
             {rowsError && <ErrorAlert message={rowsError} />}

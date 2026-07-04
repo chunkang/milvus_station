@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import SourceView from "./SourceView";
 import * as api from "../api";
@@ -197,6 +203,42 @@ describe("SourceView", () => {
     fireEvent.click(testButton);
 
     // The SearchTestModal dialog opens targeting the collection name.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/search test on/i);
+    expect(dialog).toHaveTextContent("milvus_station_users");
+  });
+
+  it("shows a 'Test' button in the selected table's record-list header and opens the search dialog for its collection", async () => {
+    mockedApi.getTables.mockResolvedValue({
+      database: "milvus_station",
+      tables: [{ name: "users", rows: 42 }],
+    });
+    mockedApi.getCollections.mockResolvedValue({
+      collections: [{ name: "milvus_station_users", count: 42 }],
+    });
+
+    render(<SourceView />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^milvus_station$/ })
+    );
+
+    // Select the table so its records (DataTable) are displayed.
+    fireEvent.click(await screen.findByRole("button", { name: /users/ }));
+    await screen.findByText("alice");
+
+    // The record-list header shows the table name and a Test button beside it.
+    const recordHeaderTitle = screen.getByText(/milvus_station · users/i);
+    const recordHeaderRow = recordHeaderTitle.parentElement as HTMLElement;
+    expect(recordHeaderRow).not.toBeNull();
+
+    // A Test button lives in the record-list header (in addition to the per-row one).
+    const headerTestButton = within(recordHeaderRow).getByRole("button", {
+      name: /^test$/i,
+    });
+    expect(headerTestButton).toBeInTheDocument();
+
+    fireEvent.click(headerTestButton);
+
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(/search test on/i);
     expect(dialog).toHaveTextContent("milvus_station_users");
