@@ -11,30 +11,7 @@ published is **`38005`**.
 
 ## Architecture
 
-```
-                         ┌──────────────────────────────────────────┐
-  Browser ──▶ nginx ──▶  │  /       React admin console (shadcn/ui)  │
-            (:38005)     │  /mysql  phpMyAdmin                       │
-                         │  /api    FastAPI backend                  │
-                         └──────────────────────────────────────────┘
-
-  Data pipeline:
-  MariaDB (source text) ─▶ FastAPI ─▶ Ollama · Llama (nomic-embed-text, 768-dim)
-                                        └─▶ Milvus (IVF_FLAT / COSINE)  ◀─ etcd + minio
-                                              └─▶ semantic search results
-```
-
-| Component            | Role                                                            |
-|----------------------|-----------------------------------------------------------------|
-| **nginx**            | Sole ingress on `:38005`; serves the React build + proxies `/mysql` and `/api` |
-| **React + shadcn/ui**| Admin console (Main / Source / Milvus / mysqladmin)             |
-| **FastAPI**          | Backend API: browse MySQL, index columns, search collections    |
-| **MariaDB**          | Relational store — the source-of-truth text                     |
-| **phpMyAdmin**       | Database admin UI (at `/mysql`)                                  |
-| **Ollama**           | Llama embedding runtime (`nomic-embed-text`, 768-dim, CPU)       |
-| **Milvus**           | Vector store / similarity search (standalone)                   |
-| **etcd + minio**     | Milvus metadata + object storage                                |
-| **ollama-init**      | One-shot: pulls the embedding model on first startup            |
+![milvus_station architecture](img/architecture.png)
 
 ## Prerequisites
 
