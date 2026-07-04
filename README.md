@@ -26,6 +26,16 @@ docker compose up -d --build  # build images and start all 8 services
 docker compose ps             # watch services become healthy
 ```
 
+> Embedding model auto-pull: the `nomic-embed-text` embedding model is pulled
+> automatically by the one-shot `ollama-init` service on first startup (this may
+> take a minute). The app comes up immediately; indexing/embedding works once the
+> pull completes. The model is cached in the `ollama_data` volume, so subsequent
+> ups are a fast no-op. Manual fallback if needed:
+>
+> ```bash
+> docker compose exec ollama ollama pull nomic-embed-text
+> ```
+
 Then open:
 
 | URL                                   | What you get                                            |

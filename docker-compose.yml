@@ -156,6 +156,27 @@ services:
       start_period: 30s
 
   # ---------------------------------------------------------------------------
+  # One-shot model puller. Waits for ollama to report healthy, then pulls the
+  # embedding model into the shared ollama_data volume and exits. Because the
+  # ollama CLI targets OLLAMA_HOST, this runs against the ollama container.
+  # On subsequent ups the model is already on the volume, so the pull is a fast
+  # no-op. restart: "no" ensures it runs once and does not restart-loop.
+  # No host port; internal bridge network only.
+  # ---------------------------------------------------------------------------
+  ollama-init:
+    image: ollama/ollama:0.5.4
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-nomic-embed-text}
+    entrypoint: ["/bin/sh", "-c", "echo 'Pulling embedding model '$$OLLAMA_MODEL'...'; ollama pull \"$$OLLAMA_MODEL\"; echo 'model ready.'"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - milvus_net
+
+  # ---------------------------------------------------------------------------
   # FastAPI health & status backend. Reached through nginx at /api (no host port).
   # Starts only after mariadb + milvus + ollama report healthy.
   # ---------------------------------------------------------------------------

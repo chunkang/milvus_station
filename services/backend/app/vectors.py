@@ -36,6 +36,40 @@ DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 100
 
 
+class EmbeddingError(RuntimeError):
+    """Base class for embedding failures carrying a user-facing message.
+
+    ``str(exc)`` is safe to surface directly to the UI; ``build_index``
+    forwards it verbatim as the ``message`` of an error payload.
+    """
+
+
+class EmbeddingModelNotAvailableError(EmbeddingError):
+    """Raised when Ollama does not yet have the configured model pulled.
+
+    Ollama answers ``/api/embeddings`` with HTTP 404 (or a body mentioning
+    the model must be pulled) until the model is present. We do NOT pull
+    from within the request; the compose ``ollama-init`` service handles
+    that separately. Here we only produce a clear, actionable message.
+    """
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+        super().__init__(
+            f"Embedding model '{model}' is not available yet. It is being "
+            "prepared (pulled) on the server — please try again in a minute. "
+            f"You can also run: docker compose exec ollama ollama pull {model}"
+        )
+
+
+class EmbeddingServiceUnreachableError(EmbeddingError):
+    """Raised when Ollama cannot be reached at all (connection/timeout)."""
+
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model
+        super().__init__("Embedding service (Ollama) is not reachable")
+
+
 def sanitize_collection_name(db: str, table: str) -> str:
     """Build a Milvus-safe collection name from ``db`` and ``table``."""
     raw = f"{db}_{table}"
@@ -49,19 +83,45 @@ def embed_text(text: str, settings: Settings | None = None) -> list[float]:
     """Return the embedding vector for ``text`` via Ollama.
 
     Uses ``httpx`` at module scope so tests can monkeypatch
-    ``vectors.httpx.post``. Raises on transport / HTTP errors so callers
-    can convert failures into a structured error payload.
+    ``vectors.httpx.post``. Translates the two failure modes callers care
+    about into typed :class:`EmbeddingError` subclasses whose messages are
+    safe to show verbatim in the UI:
+
+    * HTTP 404 (or a body indicating the model must be pulled) becomes
+      :class:`EmbeddingModelNotAvailableError` — the configured model has
+      not been pulled into Ollama yet.
+    * Connection / timeout failures become
+      :class:`EmbeddingServiceUnreachableError`.
+
+    Any other error is re-raised unchanged so the generic error path can
+    report it. The successful path is unchanged: it returns the vector.
     """
     settings = settings or get_settings()
     model = settings.ollama_model or "nomic-embed-text"
     url = f"{settings.ollama_base_url.rstrip('/')}/api/embeddings"
 
-    response = httpx.post(
-        url,
-        json={"model": model, "prompt": text},
-        timeout=settings.probe_timeout_seconds + 30,
-    )
-    response.raise_for_status()
+    try:
+        response = httpx.post(
+            url,
+            json={"model": model, "prompt": text},
+            timeout=settings.probe_timeout_seconds + 30,
+        )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        # Ollama returns 404 (and a "model ... not found" body) until the
+        # model is pulled. Treat that specifically; do NOT auto-pull here.
+        status = getattr(exc.response, "status_code", None)
+        body = ""
+        try:
+            body = (exc.response.text or "").lower()
+        except Exception:  # pragma: no cover - defensive, body is best-effort
+            body = ""
+        if status == 404 or "not found" in body or "pull" in body:
+            raise EmbeddingModelNotAvailableError(model) from exc
+        raise
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        raise EmbeddingServiceUnreachableError(model) from exc
+
     payload = response.json()
     return list(payload["embedding"])
 
@@ -142,7 +202,16 @@ def build_index(
             "dim": dim,
             "message": f"indexed {len(pks)} rows into {collection}",
         }
-    except Exception as exc:  # Ollama / Milvus unreachable or failed
+    except EmbeddingError as exc:  # model-not-pulled / Ollama unreachable
+        # The message is crafted for end-users; forward it verbatim.
+        return {
+            "status": "error",
+            "collection": collection,
+            "indexed": 0,
+            "dim": 0,
+            "message": str(exc),
+        }
+    except Exception as exc:  # Milvus unreachable or any other failure
         return {
             "status": "error",
             "collection": collection,

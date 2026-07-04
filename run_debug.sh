@@ -172,6 +172,15 @@ health_watcher() {
     now="$(date +%s)"; elapsed=$((now-start))
     if [ "$healthy" -eq "$total" ] && [ "$total" -gt 0 ]; then
       ok "All $total services healthy (after ${elapsed}s)."
+      # Ensure the embedding model is present (idempotent; fast no-op if already
+      # pulled by the ollama-init service). Read OLLAMA_MODEL from .env if set.
+      local ollama_model
+      ollama_model="$(grep -E '^OLLAMA_MODEL=' .env 2>/dev/null | cut -d= -f2 || true)"
+      ollama_model="${ollama_model:-nomic-embed-text}"
+      log "Ensuring embedding model '$ollama_model' is pulled..."
+      docker compose exec -T ollama ollama pull "$ollama_model" 2>&1 | tee -a "$LOG_FILE" \
+        && ok "Embedding model '$ollama_model' ready." \
+        || warn "Could not confirm embedding model '$ollama_model'; check 'docker compose logs ollama-init'."
       if [ "$OPEN_BROWSER" -eq 1 ]; then
         log "Opening frontend at $FRONTEND_URL ..."
         case "$OS" in

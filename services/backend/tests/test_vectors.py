@@ -33,6 +33,20 @@ class _FakeResponse:
         return self._data
 
 
+def _model_not_found_post(url, json=None, timeout=None):
+    """Simulate Ollama returning HTTP 404 for an un-pulled model.
+
+    Builds a real ``httpx.Response`` so ``raise_for_status`` raises a
+    genuine ``httpx.HTTPStatusError`` exactly like the live client would.
+    """
+    request = httpx.Request("POST", url)
+    return httpx.Response(
+        status_code=404,
+        request=request,
+        json={"error": 'model "nomic-embed-text" not found, try pulling it first'},
+    )
+
+
 def _make_fake_pymilvus(record, connect_error=False):
     mod = types.ModuleType("pymilvus")
 
@@ -187,6 +201,45 @@ def test_index_ollama_unreachable_returns_error(
     result = vectors.build_index("shop", "users", "bio")
     assert result["status"] == "error"
     assert "message" in result
+
+
+def test_index_model_not_pulled_returns_graceful_error(
+    monkeypatch, stub_validation
+):
+    """A 404 from Ollama (model not pulled) must not raise and must yield a
+    clear, actionable message mentioning the model name and guidance."""
+    monkeypatch.setattr(vectors.httpx, "post", _model_not_found_post)
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus({}))
+
+    # Must not raise despite httpx.HTTPStatusError under the hood.
+    result = vectors.build_index("shop", "users", "bio")
+
+    assert result["status"] == "error"
+    assert result["indexed"] == 0
+    message = result["message"]
+    assert "nomic-embed-text" in message  # actual configured model name
+    assert "try again" in message.lower()
+    assert "pull" in message.lower()
+
+
+def test_index_endpoint_model_not_pulled_returns_200_error(
+    monkeypatch, stub_validation, client
+):
+    """POST /index returns HTTP 200 with status:error and pull guidance when
+    the embedding model is not available in Ollama yet."""
+    monkeypatch.setattr(vectors.httpx, "post", _model_not_found_post)
+    monkeypatch.setitem(sys.modules, "pymilvus", _make_fake_pymilvus({}))
+
+    resp = client.post(
+        "/index", json={"database": "shop", "table": "users", "column": "bio"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "error"
+    assert "nomic-embed-text" in body["message"]
+    assert "try again" in body["message"].lower()
+    assert "pull" in body["message"].lower()
 
 
 def test_index_milvus_unreachable_returns_error(
