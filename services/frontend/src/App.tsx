@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Root component: three-menu data console with lightweight, typed
 // state-based view switching (Home / Source / Milvus). The mysqladmin
 // menu item lives in NavBar as an external link to /mysql/.

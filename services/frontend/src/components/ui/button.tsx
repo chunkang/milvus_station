@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"

@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Top navigation bar for the data console.
 // "Main", "Source" and "Milvus" switch the SPA view; "mysqladmin" opens
 // /mysql/ in a new tab and does NOT change the current view.

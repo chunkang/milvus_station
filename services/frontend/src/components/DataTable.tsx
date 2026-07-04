@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Reusable data grid built on TanStack Table.
 // Accepts columns + rows where each row is an array of cell values, aligned
 // positionally with the columns array. Pagination is SERVER-SIDE: the parent

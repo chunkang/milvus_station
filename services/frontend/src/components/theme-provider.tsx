@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Lightweight light/dark theme provider (no external dependency).
 // Toggles the `.dark` class on <html>, persists the choice to localStorage,
 // and exposes a `useTheme` hook consumed by the app and the sonner Toaster.

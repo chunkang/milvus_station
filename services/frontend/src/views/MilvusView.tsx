@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Milvus view: list collections -> browse a collection's entities.
 import { useEffect, useState } from "react";
 import { Layers, Search, TriangleAlert, WifiOff } from "lucide-react";

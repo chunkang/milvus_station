@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Modal dialog for running a semantic-search test against a Milvus collection.
 // Takes a query (+ optional top_k), POSTs to /api/milvus/collections/{name}/search,
 // and renders the ranked results (toast + inline alert on error).

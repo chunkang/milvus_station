@@ -1,3 +1,9 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ milvus_station                                                           │
+# │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+# │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+# └──────────────────────────────────────────────────────────────────────────┘
+
 -- SPEC-INFRA-001 / U2: seed the application schema and grant the milvus user
 -- full privileges. Runs once, on an empty data directory, via
 -- /docker-entrypoint-initdb.d. Idempotent so a re-run is harmless.

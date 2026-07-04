@@ -1,3 +1,9 @@
+# ┌──────────────────────────────────────────────────────────────────────────┐
+# │ milvus_station                                                           │
+# │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+# │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+# └──────────────────────────────────────────────────────────────────────────┘
+
 # syntax=docker/dockerfile:1
 # Ingress image: builds the React SPA and serves it (plus proxy config) via nginx.
 # Build context is the repository root so both the frontend sources and this

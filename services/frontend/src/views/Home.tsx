@@ -1,3 +1,9 @@
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ milvus_station                                                           │
+// │ Author  : Chun Kang <kurapa@kurapa.com>                                  │
+// │ Created : 2026-07-03  (PDT, UTC-07:00)                                   │
+// └──────────────────────────────────────────────────────────────────────────┘
+
 // Landing / Main page: explains the PURPOSE and ARCHITECTURE of milvus_station.
 // Fully offline & CSP-safe — text, shadcn components, lucide icons and CSS only.
 // (No external images, fonts or CDN assets.)
