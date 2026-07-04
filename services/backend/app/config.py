@@ -55,6 +55,9 @@ class Settings:
     ollama_base_url: str = field(
         default_factory=lambda: _env("OLLAMA_BASE_URL", "http://ollama:11434")
     )
+    ollama_model: str = field(
+        default_factory=lambda: _env("OLLAMA_MODEL", "nomic-embed-text")
+    )
 
     # Milvus internal deps (not directly probed, documented for completeness)
     etcd_endpoint: str = field(default_factory=lambda: _env("ETCD_ENDPOINT", "etcd:2379"))
