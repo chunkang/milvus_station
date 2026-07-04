@@ -1,0 +1,8 @@
+# Runtime dependencies (SPEC-INFRA-001, TASK-006)
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30
+httpx>=0.27
+# Milvus 2.5.x compatible client
+pymilvus>=2.5,<2.6
+# MariaDB probe driver (pure-python, no build deps)
+PyMySQL>=1.1
