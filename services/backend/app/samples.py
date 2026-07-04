@@ -366,54 +366,69 @@ def _build_article_rows() -> list[tuple[Any, ...]]:
 # --------------------------------------------------------------------------
 # A handful of curated, real films kick off the list with hand-written plot
 # overviews; the remainder are composed across genres so we reach 100+.
+#
+# Curated tuples are shaped (title, overview, actors, genre, year, rating):
+# ``actors`` lists three to four real lead performers from each film.
 _CURATED_MOVIES: tuple[tuple[Any, ...], ...] = (
     ("The Shawshank Redemption",
      "A banker sentenced to life in prison forms an enduring friendship and "
      "quietly holds on to hope over two long decades behind bars.",
+     "Tim Robbins, Morgan Freeman, Bob Gunton, William Sadler",
      "Drama", 1994, 9.3),
     ("Inception",
      "A thief who steals corporate secrets through dream-sharing technology is "
      "offered a chance to erase his past by planting an idea in a target's mind.",
+     "Leonardo DiCaprio, Joseph Gordon-Levitt, Elliot Page, Tom Hardy",
      "Science Fiction", 2010, 8.8),
     ("The Godfather",
      "The aging patriarch of a crime dynasty transfers control of his "
      "clandestine empire to his reluctant youngest son.",
+     "Marlon Brando, Al Pacino, James Caan, Robert Duvall",
      "Crime", 1972, 9.2),
     ("Spirited Away",
      "A young girl wanders into a world of spirits and gods and must find the "
      "courage to free her parents and return home.",
+     "Rumi Hiiragi, Miyu Irino, Mari Natsuki, Takashi Naito",
      "Animation", 2001, 8.6),
     ("The Dark Knight",
      "Batman faces the Joker, a criminal mastermind who plunges Gotham into "
      "chaos and tests the thin line between hero and vigilante.",
+     "Christian Bale, Heath Ledger, Aaron Eckhart, Michael Caine",
      "Action", 2008, 9.0),
     ("Parasite",
      "A poor family schemes to become employed by a wealthy household, until a "
      "shocking discovery upends their carefully laid plan.",
+     "Song Kang-ho, Lee Sun-kyun, Cho Yeo-jeong, Choi Woo-shik",
      "Thriller", 2019, 8.5),
     ("Forrest Gump",
      "Through sheer decency and luck, a good-hearted man from Alabama finds "
      "himself at the center of decades of American history.",
+     "Tom Hanks, Robin Wright, Gary Sinise, Sally Field",
      "Drama", 1994, 8.8),
     ("Interstellar",
      "As Earth grows unlivable, a former pilot leads a mission through a "
      "wormhole in a desperate search for a new home for humanity.",
+     "Matthew McConaughey, Anne Hathaway, Jessica Chastain, Michael Caine",
      "Science Fiction", 2014, 8.6),
     ("The Matrix",
      "A hacker discovers that reality is a simulation and joins a rebellion to "
      "overthrow the machines that enslave humankind.",
+     "Keanu Reeves, Laurence Fishburne, Carrie-Anne Moss, Hugo Weaving",
      "Science Fiction", 1999, 8.7),
     ("Coco",
      "A boy who dreams of becoming a musician journeys into the Land of the "
      "Dead to uncover his family's long-buried history.",
+     "Anthony Gonzalez, Gael Garcia Bernal, Benjamin Bratt, Alanna Ubach",
      "Animation", 2017, 8.4),
     ("Pulp Fiction",
      "The lives of two hit men, a boxer, and a pair of diner robbers intertwine "
      "in four tales of violence and unexpected redemption.",
+     "John Travolta, Samuel L. Jackson, Uma Thurman, Bruce Willis",
      "Crime", 1994, 8.9),
     ("Whiplash",
      "An ambitious young drummer clashes with a ruthless instructor whose "
      "brutal methods push him to the edge of his talent.",
+     "Miles Teller, J.K. Simmons, Paul Reiser, Melissa Benoist",
      "Drama", 2014, 8.5),
 )
 
@@ -421,9 +436,11 @@ _CURATED_MOVIES: tuple[tuple[Any, ...], ...] = (
 def _build_movie_rows() -> list[tuple[Any, ...]]:
     """Curated real films plus composed synopses across ten genres.
 
-    12 curated + (10 genres x 10 protagonists) = 112 rows. Composed titles are
-    built from prefix/noun pools so each is unique, and every overview embeds
-    both the genre template and the protagonist, guaranteeing distinct text.
+    12 curated + (10 genres x 10 protagonists) = 112 rows. Each row is shaped
+    (title, overview, actors, genre, year, rating). Composed titles are built
+    from prefix/noun pools so each is unique, every overview embeds both the
+    genre template and the protagonist, and each composed cast is derived
+    deterministically from the running row index via fixed name pools.
     """
     rows: list[tuple[Any, ...]] = list(_CURATED_MOVIES)
 
@@ -474,6 +491,35 @@ def _build_movie_rows() -> list[tuple[Any, ...]]:
         "Horizon", "Promise", "Empire", "Harbor", "Requiem", "Frontier",
         "Lullaby", "Verdict", "Odyssey", "Mirage", "Covenant", "Ember",
     ]
+    # Fixed name pools for composing a deterministic three-actor cast per row.
+    # The (first, surname) picks are driven purely by the running index and
+    # stride constants, so the same cast string is produced on every run.
+    actor_first_names = [
+        "Ava", "Marcus", "Lena", "Noah", "Priya", "Diego", "Sofia", "Ethan",
+        "Maya", "Julian", "Nadia", "Owen", "Clara", "Theo", "Isla", "Malik",
+        "Rosa", "Felix", "Ingrid", "Kenji", "Elena", "Hugo", "Simone", "Amara",
+        "Leon", "Freya", "Rafael", "Yara",
+    ]
+    actor_surnames = [
+        "Bennett", "Reed", "Fox", "Hale", "Marsh", "Quinn", "Vance", "Doyle",
+        "Ashby", "Novak", "Cole", "Rios", "Frost", "Blake", "Mercer", "Sato",
+        "Lange", "Okafor", "Pryce", "Dane", "Whitlock", "Ferro", "Nash",
+        "Osei", "Krause", "Solberg", "Ibarra", "Wren",
+    ]
+
+    def _compose_cast(index: int) -> str:
+        """Deterministically pick three distinct-looking actor names.
+
+        The three first-name and surname positions use co-prime strides so
+        successive rows shuffle through the pools without immediate repeats.
+        """
+        nf, ns = len(actor_first_names), len(actor_surnames)
+        names = []
+        for slot in range(3):
+            fi = (index * 3 + slot * 7 + slot) % nf
+            si = (index * 5 + slot * 11 + slot * 2) % ns
+            names.append(f"{actor_first_names[fi]} {actor_surnames[si]}")
+        return ", ".join(names)
 
     i = 0
     for gi, (genre, template) in enumerate(genres):
@@ -482,9 +528,10 @@ def _build_movie_rows() -> list[tuple[Any, ...]]:
             noun = title_nouns[(i // len(title_prefixes)) % len(title_nouns)]
             title = f"{prefix} {noun}"
             overview = template.format(role=role)
+            actors = _compose_cast(i)
             year = 1995 + ((gi * 7 + ri * 3) % 30)
             rating = round(6.3 + ((gi * 3 + ri * 5) % 27) / 10.0, 1)
-            rows.append((title, overview, genre, year, rating))
+            rows.append((title, overview, actors, genre, year, rating))
             i += 1
     return rows
 
@@ -712,13 +759,14 @@ _MOVIES = SampleTable(
         "id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, "
         "title VARCHAR(255) NOT NULL, "
         "overview TEXT NOT NULL, "
+        "actors VARCHAR(512), "
         "genre VARCHAR(100), "
         "year INT, "
         "rating DECIMAL(3,1), "
         "PRIMARY KEY (id)"
         f") {_TABLE_OPTS}"
     ),
-    columns=("title", "overview", "genre", "year", "rating"),
+    columns=("title", "overview", "actors", "genre", "year", "rating"),
     rows=_build_movie_rows(),
 )
 
